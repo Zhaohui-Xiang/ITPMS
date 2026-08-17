@@ -10,10 +10,6 @@ use LogicException;
 
 class DemoWorkflowSeeder extends Seeder
 {
-    private const SEED_MARKER = 'ipms:demo:v1';
-
-    private const PROJECT_DESCRIPTION_MARKER = '[IPMS_DEMO_MANAGED:v1]';
-
     private const ROLE_USERS = [
         'super_admin' => ['username' => 'demo.super_admin', 'display_name' => '演示超级管理员', 'user_type' => 1],
         'it_pm' => ['username' => 'demo.it_pm', 'display_name' => '演示 IT 项目经理', 'user_type' => 1],
@@ -32,11 +28,13 @@ class DemoWorkflowSeeder extends Seeder
 
     private const PROJECTS = [
         [
+            'seed_marker' => 'ipms:demo:project:core:v1',
             'name' => '[DEMO] 核心业务平台',
             'system_type' => 1,
             'description' => '[IPMS_DEMO_MANAGED:v1] 核心业务流程演示项目',
         ],
         [
+            'seed_marker' => 'ipms:demo:project:collaboration:v1',
             'name' => '[DEMO] 协同办公平台',
             'system_type' => 2,
             'description' => '[IPMS_DEMO_MANAGED:v1] 内部协同流程演示项目',
@@ -101,24 +99,22 @@ class DemoWorkflowSeeder extends Seeder
 
     private function assertNoUserCollisions(): void
     {
-        foreach (self::ROLE_USERS as $user) {
-            $expectedEmail = $user['username'].'@ipms.local';
-            $existing = DB::table('users')
-                ->whereRaw('LOWER(username) = ?', [strtolower($user['username'])])
-                ->first();
+        foreach (self::ROLE_USERS as $roleCode => $user) {
+            if (DB::table('users')->where('seed_marker', $this->userMarker($roleCode))->exists()) {
+                continue;
+            }
 
-            if ($existing !== null && $existing->seed_marker !== self::SEED_MARKER) {
+            if (DB::table('users')
+                ->whereRaw('LOWER(username) = ?', [strtolower($user['username'])])
+                ->exists()) {
                 throw new LogicException("Reserved demo user marker collision: {$user['username']}.");
             }
 
-            if ($existing === null) {
-                $emailOwner = DB::table('users')
-                    ->whereRaw('LOWER(email) = ?', [strtolower($expectedEmail)])
-                    ->first();
-
-                if ($emailOwner !== null) {
-                    throw new LogicException("Reserved demo email collision: {$expectedEmail}.");
-                }
+            $expectedEmail = $user['username'].'@ipms.local';
+            if (DB::table('users')
+                ->whereRaw('LOWER(email) = ?', [strtolower($expectedEmail)])
+                ->exists()) {
+                throw new LogicException("Reserved demo email marker collision: {$expectedEmail}.");
             }
         }
     }
@@ -144,11 +140,13 @@ class DemoWorkflowSeeder extends Seeder
     private function assertNoProjectCollisions(): void
     {
         foreach (self::PROJECTS as $project) {
-            $existing = DB::table('projects')
-                ->whereRaw('LOWER(name) = ?', [strtolower($project['name'])])
-                ->first();
+            if (DB::table('projects')->where('seed_marker', $project['seed_marker'])->exists()) {
+                continue;
+            }
 
-            if ($existing !== null && $existing->seed_marker !== self::SEED_MARKER) {
+            if (DB::table('projects')
+                ->whereRaw('LOWER(name) = ?', [strtolower($project['name'])])
+                ->exists()) {
                 throw new LogicException("Reserved demo project marker collision: {$project['name']}.");
             }
         }
@@ -187,11 +185,10 @@ class DemoWorkflowSeeder extends Seeder
         $userIds = [];
 
         foreach (self::ROLE_USERS as $roleCode => $user) {
-            $existing = DB::table('users')
-                ->whereRaw('LOWER(username) = ?', [strtolower($user['username'])])
-                ->first();
+            $seedMarker = $this->userMarker($roleCode);
+            $managed = DB::table('users')->where('seed_marker', $seedMarker)->first();
 
-            if ($existing === null) {
+            if ($managed === null) {
                 $userId = DB::table('users')->insertGetId([
                     'username' => $user['username'],
                     'password' => Hash::make($password),
@@ -204,13 +201,13 @@ class DemoWorkflowSeeder extends Seeder
                     'is_staff' => $roleCode === 'super_admin',
                     'must_change_password' => false,
                     'is_disabled' => false,
-                    'seed_marker' => self::SEED_MARKER,
+                    'seed_marker' => $seedMarker,
                     'created_by_id' => null,
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);
             } else {
-                $userId = $existing->id;
+                $userId = $managed->id;
             }
 
             $userIds[$roleCode] = $userId;
@@ -289,11 +286,11 @@ class DemoWorkflowSeeder extends Seeder
     private function seedProjects(array $userIds, int $supplierOrganizationId): void
     {
         foreach (self::PROJECTS as $project) {
-            $existing = DB::table('projects')
-                ->whereRaw('LOWER(name) = ?', [strtolower($project['name'])])
+            $managed = DB::table('projects')
+                ->where('seed_marker', $project['seed_marker'])
                 ->first();
 
-            if ($existing === null) {
+            if ($managed === null) {
                 $projectId = DB::table('projects')->insertGetId([
                     'name' => $project['name'],
                     'system_type' => $project['system_type'],
@@ -301,13 +298,13 @@ class DemoWorkflowSeeder extends Seeder
                     'status' => 1,
                     'manager_id' => $userIds['it_pm'],
                     'supplier_org_id' => $supplierOrganizationId,
-                    'seed_marker' => self::SEED_MARKER,
+                    'seed_marker' => $project['seed_marker'],
                     'created_by_id' => $userIds['super_admin'],
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);
             } else {
-                $projectId = $existing->id;
+                $projectId = $managed->id;
             }
 
             $this->syncExactProjectMembers($projectId, $userIds);
@@ -355,5 +352,10 @@ class DemoWorkflowSeeder extends Seeder
                     ]);
             }
         }
+    }
+
+    private function userMarker(string $roleCode): string
+    {
+        return "ipms:demo:user:{$roleCode}:v1";
     }
 }

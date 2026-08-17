@@ -10,7 +10,7 @@ use LogicException;
 
 class AdminUserSeeder extends Seeder
 {
-    private const SEED_MARKER = 'ipms:admin:v1';
+    private const SEED_MARKER = 'ipms:admin:user:v1';
 
     public function run(): void
     {
@@ -23,12 +23,18 @@ class AdminUserSeeder extends Seeder
         }
 
         DB::transaction(function () use ($password): void {
-            $existing = DB::table('users')
-                ->whereRaw('LOWER(username) = ?', ['admin'])
+            $managed = DB::table('users')
+                ->where('seed_marker', self::SEED_MARKER)
                 ->first();
 
-            if ($existing !== null && $existing->seed_marker !== self::SEED_MARKER) {
-                throw new LogicException('Reserved admin username marker collision.');
+            if ($managed === null) {
+                if (DB::table('users')->whereRaw('LOWER(username) = ?', ['admin'])->exists()) {
+                    throw new LogicException('Reserved admin username marker collision.');
+                }
+
+                if (DB::table('users')->whereRaw('LOWER(email) = ?', ['admin@ipms.local'])->exists()) {
+                    throw new LogicException('Reserved admin email marker collision.');
+                }
             }
 
             $roleId = DB::table('roles')->where('code', 'super_admin')->value('id');
@@ -37,11 +43,7 @@ class AdminUserSeeder extends Seeder
                 throw new LogicException('The super_admin role is required to seed the administrator.');
             }
 
-            if ($existing === null) {
-                if (DB::table('users')->whereRaw('LOWER(email) = ?', ['admin@ipms.local'])->exists()) {
-                    throw new LogicException('Reserved admin email collision.');
-                }
-
+            if ($managed === null) {
                 $userId = DB::table('users')->insertGetId([
                     'username' => 'admin',
                     'password' => Hash::make($password),
@@ -60,7 +62,7 @@ class AdminUserSeeder extends Seeder
                     'updated_at' => now(),
                 ]);
             } else {
-                $userId = $existing->id;
+                $userId = $managed->id;
             }
 
             if (! DB::table('role_user')->where([

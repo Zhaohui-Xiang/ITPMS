@@ -11,12 +11,12 @@ return new class extends Migration
     {
         Schema::table('users', function (Blueprint $table) {
             $table->string('seed_marker', 64)->nullable();
-            $table->index('seed_marker', 'ix_users_seed_marker');
+            $table->unique('seed_marker', 'ux_users_seed_marker');
         });
 
         Schema::table('projects', function (Blueprint $table) {
             $table->string('seed_marker', 64)->nullable();
-            $table->index('seed_marker', 'ix_projects_seed_marker');
+            $table->unique('seed_marker', 'ux_projects_seed_marker');
         });
 
         DB::statement('ALTER TABLE users DROP CONSTRAINT IF EXISTS ux_users_username');
@@ -29,12 +29,12 @@ return new class extends Migration
         DB::statement('ALTER TABLE users ADD CONSTRAINT ux_users_username UNIQUE (username)');
 
         Schema::table('projects', function (Blueprint $table) {
-            $table->dropIndex('ix_projects_seed_marker');
+            $table->dropUnique('ux_projects_seed_marker');
             $table->dropColumn('seed_marker');
         });
 
         Schema::table('users', function (Blueprint $table) {
-            $table->dropIndex('ix_users_seed_marker');
+            $table->dropUnique('ux_users_seed_marker');
             $table->dropColumn('seed_marker');
         });
     }

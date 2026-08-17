@@ -77,15 +77,15 @@ final class SeedMarkerGuardTest extends TestCase
 
         $this->assertDatabaseHas('users', [
             'username' => 'admin',
-            'seed_marker' => 'ipms:admin:v1',
+            'seed_marker' => 'ipms:admin:user:v1',
         ]);
         $this->assertSame(
             7,
-            DB::table('users')->where('seed_marker', 'ipms:demo:v1')->count(),
+            DB::table('users')->where('seed_marker', 'like', 'ipms:demo:user:%:v1')->count(),
         );
         $this->assertSame(
             2,
-            DB::table('projects')->where('seed_marker', 'ipms:demo:v1')->count(),
+            DB::table('projects')->where('seed_marker', 'like', 'ipms:demo:project:%:v1')->count(),
         );
     }
 
@@ -152,7 +152,7 @@ final class SeedMarkerGuardTest extends TestCase
             'name' => '[demo] 核心业务平台',
             'seed_marker' => null,
         ]);
-        $this->assertSame(0, DB::table('users')->where('seed_marker', 'ipms:demo:v1')->count());
+        $this->assertSame(0, DB::table('users')->where('seed_marker', 'like', 'ipms:demo:user:%:v1')->count());
     }
 
     public function test_existing_admin_without_marker_is_not_granted_super_admin(): void
@@ -215,7 +215,7 @@ final class SeedMarkerGuardTest extends TestCase
     private function relationshipTimestamps(): array
     {
         $demoUserIds = DB::table('users')
-            ->where('seed_marker', 'ipms:demo:v1')
+            ->where('seed_marker', 'like', 'ipms:demo:user:%:v1')
             ->pluck('id');
 
         return [
@@ -234,7 +234,7 @@ final class SeedMarkerGuardTest extends TestCase
                 ->map(fn ($row) => (array) $row)
                 ->all(),
             'projects' => DB::table('project_members')
-                ->whereIn('project_id', DB::table('projects')->where('seed_marker', 'ipms:demo:v1')->pluck('id'))
+                ->whereIn('project_id', DB::table('projects')->where('seed_marker', 'like', 'ipms:demo:project:%:v1')->pluck('id'))
                 ->orderBy('project_id')
                 ->orderBy('user_id')
                 ->get(['project_id', 'user_id', 'assigned_at'])

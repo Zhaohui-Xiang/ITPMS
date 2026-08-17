@@ -14,6 +14,10 @@ class Project extends Model
         'manager_id', 'supplier_org_id', 'created_by_id',
     ];
 
+    protected $hidden = [
+        'seed_marker',
+    ];
+
     protected $casts = [
         'status' => 'integer',
     ];
