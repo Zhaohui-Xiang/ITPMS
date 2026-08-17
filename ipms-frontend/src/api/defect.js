@@ -67,7 +67,7 @@ export function resolveDefect(id, data) {
 /**
  * 复测验证
  * @param {Number|String} id
- * @param {Object} data - { action: 'pass'|'fail', comment }
+ * @param {Object} data - { result: 'pass'|'fail', comment }
  */
 export function verifyDefect(id, data) {
   return request.post(`/defects/${id}/verify`, data)

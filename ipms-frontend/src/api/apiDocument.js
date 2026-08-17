@@ -25,10 +25,10 @@ export function getApiDocument(id) {
  * 创建接口文档
  * @param {Number|String} projectId
  * @param {Object} data - {
- *   name, path, method, folder_id, requirement_id,
+ *   api_name, request_path, request_method, folder_id, requirement_id,
  *   request_params: [{ name, type, required, description }],
  *   response_params: [{ name, type, description }],
- *   auth_type, request_example, response_example, notes
+ *   auth_type, rich_text_body
  * }
  */
 export function createApiDocument(projectId, data) {

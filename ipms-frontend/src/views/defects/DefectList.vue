@@ -377,10 +377,10 @@ async function executeAction(row, actionKey, comment) {
         // await resolveDefect(row.id, { fix_description: comment })
         break
       case 'verify_pass':
-        // await verifyDefect(row.id, { action: 'pass', comment })
+        // await verifyDefect(row.id, { result: 'pass', comment })
         break
       case 'verify_fail':
-        // await verifyDefect(row.id, { action: 'fail', comment })
+        // await verifyDefect(row.id, { result: 'fail', comment })
         break
       case 'reopen':
         // await reopenDefect(row.id, { reason: comment })

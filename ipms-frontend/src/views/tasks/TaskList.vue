@@ -5,6 +5,7 @@ import { Plus } from '@element-plus/icons-vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import UserSelector from '@/components/common/UserSelector.vue'
 import { listTasks, createTask, claimTask, transitionTask, holdTask } from '@/api/task'
+import { taskTransitionPayload } from '@/workflows/actionPayloads'
 
 // ================================================================
 // State
@@ -281,7 +282,7 @@ async function handleClaim(row) {
 
 async function handleStart(row) {
   try {
-    await transitionTask(row.id, { action: 'start' })
+    await transitionTask(row.id, taskTransitionPayload('start'))
     row.status = 'in_progress'
     ElMessage.success('任务已开始')
   } catch {
@@ -296,7 +297,7 @@ async function handleComplete(row) {
     type: 'success'
   })
   try {
-    await transitionTask(row.id, { action: 'complete' })
+    await transitionTask(row.id, taskTransitionPayload('complete'))
     row.status = 'done'
     ElMessage.success('任务已完成')
   } catch {
@@ -325,7 +326,7 @@ async function handleSuspend(row) {
 
 async function handleResume(row) {
   try {
-    await transitionTask(row.id, { action: 'resume' })
+    await transitionTask(row.id, taskTransitionPayload('resume'))
     row.status = 'in_progress'
     ElMessage.success('任务已恢复')
   } catch {

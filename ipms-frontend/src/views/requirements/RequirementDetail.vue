@@ -11,6 +11,10 @@ import {
   getRequirementVersions
 } from '@/api/requirement'
 import { createTask } from '@/api/task'
+import {
+  getRequirementStatusActions,
+  requirementTransitionPayload
+} from '@/workflows/actionPayloads'
 
 const route = useRoute()
 const router = useRouter()
@@ -175,33 +179,7 @@ const statusConfig = computed(() => {
   )
 })
 
-const statusActions = computed(() => {
-  const status = requirement.value.status
-  const map = {
-    pending_review: [
-      { key: 'approve', label: '审核通过', type: 'success' },
-      { key: 'reject', label: '驳回', type: 'danger', plain: true }
-    ],
-    assigned: [
-      { key: 'start_dev', label: '开始开发', type: 'primary' },
-      { key: 'return_review', label: '退回审核', type: 'warning', plain: true }
-    ],
-    developing: [
-      { key: 'complete_dev', label: '完成开发', type: 'success' },
-      { key: 'suspend', label: '挂起', type: 'warning', plain: true }
-    ],
-    testing: [
-      { key: 'pass_test', label: '测试通过', type: 'success' },
-      { key: 'fail_test', label: '打回开发', type: 'danger', plain: true }
-    ],
-    pending_online: [
-      { key: 'confirm_online', label: '确认上线', type: 'success' }
-    ],
-    online: [{ key: 'confirm_accept', label: '发起验收', type: 'success' }],
-    accepted: []
-  }
-  return map[status] || []
-})
+const statusActions = computed(() => getRequirementStatusActions(requirement.value.status))
 
 // ============================================================
 // Status Transition
@@ -251,10 +229,7 @@ async function confirmAction() {
         comment: actionComment.value || undefined
       })
     } else {
-      await transitionRequirement(requirement.value.id, {
-        action: action.key,
-        comment: actionComment.value || undefined
-      })
+      await transitionRequirement(requirement.value.id, requirementTransitionPayload(action.key))
     }
 
     ElMessage.success(`${action.label}操作成功`)

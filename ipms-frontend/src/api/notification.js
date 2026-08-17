@@ -13,7 +13,7 @@ export function getNotificationConfig() {
 
 /**
  * 更新通知配置
- * @param {Object} data - { remind_enabled, daily_remind_time, default_remind_days, smtp_*, sender_address }
+ * @param {Object} data - { remind_enabled, remind_days_before }
  */
 export function updateNotificationConfig(data) {
   return request.put('/notification-configs', data)
@@ -21,7 +21,7 @@ export function updateNotificationConfig(data) {
 
 /**
  * 获取通知日志
- * @param {Object} params - { page, pageSize, type, start_date, end_date }
+ * @param {Object} params - { notification_type, status, page_size }
  */
 export function listNotificationLogs(params) {
   return request.get('/notification-logs', { params })

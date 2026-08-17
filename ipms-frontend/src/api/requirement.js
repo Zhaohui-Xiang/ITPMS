@@ -49,8 +49,7 @@ export function reviewRequirement(id, data) {
 /**
  * 需求状态流转
  * @param {Number|String} id
- * @param {Object} data - { action, comment }
- *  action: start_dev | complete_dev | pass_test | fail_test | confirm_online | confirm_accept
+ * @param {Object} data - { status: 2|3|4|5|6|7 }
  */
 export function transitionRequirement(id, data) {
   return request.post(`/requirements/${id}/status`, data)

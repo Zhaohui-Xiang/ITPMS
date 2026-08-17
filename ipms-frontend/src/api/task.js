@@ -48,7 +48,7 @@ export function claimTask(id) {
 /**
  * 任务状态流转
  * @param {Number|String} id
- * @param {Object} data - { action: 'start'|'complete'|'suspend'|'resume', comment }
+ * @param {Object} data - { status: 1|2|3|4 }
  */
 export function transitionTask(id, data) {
   return request.post(`/tasks/${id}/status`, data)
