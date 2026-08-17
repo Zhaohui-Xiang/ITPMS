@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Support\DemoSeedGuard;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use LogicException;
@@ -10,6 +11,8 @@ class DatabaseSeeder extends Seeder
 {
     public function run(): void
     {
+        DemoSeedGuard::assertProductionAuthorized();
+
         $password = config('ipms.demo_password');
 
         if (! is_string($password) || trim($password) === '') {

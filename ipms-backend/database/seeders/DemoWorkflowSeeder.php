@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Support\DemoSeedGuard;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -9,7 +10,9 @@ use LogicException;
 
 class DemoWorkflowSeeder extends Seeder
 {
-    private const PROJECT_MARKER = '[IPMS_DEMO_MANAGED:v1]';
+    private const SEED_MARKER = 'ipms:demo:v1';
+
+    private const PROJECT_DESCRIPTION_MARKER = '[IPMS_DEMO_MANAGED:v1]';
 
     private const ROLE_USERS = [
         'super_admin' => ['username' => 'demo.super_admin', 'display_name' => '演示超级管理员', 'user_type' => 1],
@@ -50,7 +53,7 @@ class DemoWorkflowSeeder extends Seeder
 
     public function run(): void
     {
-        $this->assertEnvironmentAuthorization();
+        DemoSeedGuard::assertProductionAuthorized();
         $password = $this->requiredPassword();
 
         DB::transaction(function () use ($password): void {
@@ -61,19 +64,6 @@ class DemoWorkflowSeeder extends Seeder
             $userIds = $this->seedUsers($password, $roleIds, $organizationIds);
             $this->seedProjects($userIds, $organizationIds[2]);
         });
-    }
-
-    private function assertEnvironmentAuthorization(): void
-    {
-        if (! app()->environment('production')) {
-            return;
-        }
-
-        if (config('ipms.seed_demo') !== true || config('ipms.allow_production_demo_seed') !== true) {
-            throw new LogicException(
-                'Production demo seeding requires IPMS_SEED_DEMO=true and IPMS_ALLOW_PRODUCTION_DEMO_SEED=true.',
-            );
-        }
     }
 
     private function requiredPassword(): string
@@ -113,21 +103,22 @@ class DemoWorkflowSeeder extends Seeder
     {
         foreach (self::ROLE_USERS as $user) {
             $expectedEmail = $user['username'].'@ipms.local';
-            $existing = DB::table('users')->where('username', $user['username'])->first();
-
-            if ($existing !== null && (
-                strcasecmp((string) $existing->email, $expectedEmail) !== 0
-                || (int) $existing->user_type !== $user['user_type']
-            )) {
-                throw new LogicException("Reserved demo username collision: {$user['username']}.");
-            }
-
-            $emailOwner = DB::table('users')
-                ->whereRaw('LOWER(email) = ?', [strtolower($expectedEmail)])
+            $existing = DB::table('users')
+                ->whereRaw('LOWER(username) = ?', [strtolower($user['username'])])
                 ->first();
 
-            if ($emailOwner !== null && $emailOwner->username !== $user['username']) {
-                throw new LogicException("Reserved demo email collision: {$expectedEmail}.");
+            if ($existing !== null && $existing->seed_marker !== self::SEED_MARKER) {
+                throw new LogicException("Reserved demo user marker collision: {$user['username']}.");
+            }
+
+            if ($existing === null) {
+                $emailOwner = DB::table('users')
+                    ->whereRaw('LOWER(email) = ?', [strtolower($expectedEmail)])
+                    ->first();
+
+                if ($emailOwner !== null) {
+                    throw new LogicException("Reserved demo email collision: {$expectedEmail}.");
+                }
             }
         }
     }
@@ -153,13 +144,12 @@ class DemoWorkflowSeeder extends Seeder
     private function assertNoProjectCollisions(): void
     {
         foreach (self::PROJECTS as $project) {
-            $existing = DB::table('projects')->where('name', $project['name'])->first();
+            $existing = DB::table('projects')
+                ->whereRaw('LOWER(name) = ?', [strtolower($project['name'])])
+                ->first();
 
-            if ($existing !== null && (
-                ! is_string($existing->description)
-                || ! str_starts_with($existing->description, self::PROJECT_MARKER)
-            )) {
-                throw new LogicException("Reserved demo project collision: {$project['name']}.");
+            if ($existing !== null && $existing->seed_marker !== self::SEED_MARKER) {
+                throw new LogicException("Reserved demo project marker collision: {$project['name']}.");
             }
         }
     }
@@ -197,9 +187,11 @@ class DemoWorkflowSeeder extends Seeder
         $userIds = [];
 
         foreach (self::ROLE_USERS as $roleCode => $user) {
-            $userId = DB::table('users')->where('username', $user['username'])->value('id');
+            $existing = DB::table('users')
+                ->whereRaw('LOWER(username) = ?', [strtolower($user['username'])])
+                ->first();
 
-            if ($userId === null) {
+            if ($existing === null) {
                 $userId = DB::table('users')->insertGetId([
                     'username' => $user['username'],
                     'password' => Hash::make($password),
@@ -212,23 +204,28 @@ class DemoWorkflowSeeder extends Seeder
                     'is_staff' => $roleCode === 'super_admin',
                     'must_change_password' => false,
                     'is_disabled' => false,
+                    'seed_marker' => self::SEED_MARKER,
                     'created_by_id' => null,
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);
+            } else {
+                $userId = $existing->id;
             }
 
             $userIds[$roleCode] = $userId;
             $this->syncExactRole($userId, $roleIds[$roleCode]);
             $this->syncExactOrganization($userId, $organizationIds[$user['user_type']], $roleCode);
 
-            DB::table('notification_configs')->insertOrIgnore([
-                'user_id' => $userId,
-                'remind_enabled' => true,
-                'remind_days_before' => 1,
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
+            if (! DB::table('notification_configs')->where('user_id', $userId)->exists()) {
+                DB::table('notification_configs')->insert([
+                    'user_id' => $userId,
+                    'remind_enabled' => true,
+                    'remind_days_before' => 1,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
         }
 
         return $userIds;
@@ -241,10 +238,17 @@ class DemoWorkflowSeeder extends Seeder
             ->where('role_id', '<>', $roleId)
             ->delete();
 
-        DB::table('role_user')->updateOrInsert(
-            ['user_id' => $userId, 'role_id' => $roleId],
-            ['assigned_by_id' => null, 'assigned_at' => now()],
-        );
+        if (! DB::table('role_user')->where([
+            'user_id' => $userId,
+            'role_id' => $roleId,
+        ])->exists()) {
+            DB::table('role_user')->insert([
+                'user_id' => $userId,
+                'role_id' => $roleId,
+                'assigned_by_id' => null,
+                'assigned_at' => now(),
+            ]);
+        }
     }
 
     private function syncExactOrganization(int $userId, int $organizationId, string $roleCode): void
@@ -254,18 +258,42 @@ class DemoWorkflowSeeder extends Seeder
             ->where('organization_id', '<>', $organizationId)
             ->delete();
 
-        DB::table('organization_user')->updateOrInsert(
-            ['user_id' => $userId, 'organization_id' => $organizationId],
-            ['role_in_org' => $roleCode, 'is_primary' => true, 'assigned_at' => now()],
-        );
+        $existing = DB::table('organization_user')->where([
+            'user_id' => $userId,
+            'organization_id' => $organizationId,
+        ])->first();
+
+        if ($existing === null) {
+            DB::table('organization_user')->insert([
+                'user_id' => $userId,
+                'organization_id' => $organizationId,
+                'role_in_org' => $roleCode,
+                'is_primary' => true,
+                'assigned_at' => now(),
+            ]);
+
+            return;
+        }
+
+        if ($existing->role_in_org !== $roleCode || ! (bool) $existing->is_primary) {
+            DB::table('organization_user')
+                ->where('id', $existing->id)
+                ->update([
+                    'role_in_org' => $roleCode,
+                    'is_primary' => true,
+                    'assigned_at' => now(),
+                ]);
+        }
     }
 
     private function seedProjects(array $userIds, int $supplierOrganizationId): void
     {
         foreach (self::PROJECTS as $project) {
-            $projectId = DB::table('projects')->where('name', $project['name'])->value('id');
+            $existing = DB::table('projects')
+                ->whereRaw('LOWER(name) = ?', [strtolower($project['name'])])
+                ->first();
 
-            if ($projectId === null) {
+            if ($existing === null) {
                 $projectId = DB::table('projects')->insertGetId([
                     'name' => $project['name'],
                     'system_type' => $project['system_type'],
@@ -273,10 +301,13 @@ class DemoWorkflowSeeder extends Seeder
                     'status' => 1,
                     'manager_id' => $userIds['it_pm'],
                     'supplier_org_id' => $supplierOrganizationId,
+                    'seed_marker' => self::SEED_MARKER,
                     'created_by_id' => $userIds['super_admin'],
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);
+            } else {
+                $projectId = $existing->id;
             }
 
             $this->syncExactProjectMembers($projectId, $userIds);
@@ -296,14 +327,33 @@ class DemoWorkflowSeeder extends Seeder
             ->delete();
 
         foreach (self::PROJECT_MEMBERS as $roleCode => $projectRole) {
-            DB::table('project_members')->updateOrInsert(
-                ['project_id' => $projectId, 'user_id' => $userIds[$roleCode]],
-                [
+            $existing = DB::table('project_members')->where([
+                'project_id' => $projectId,
+                'user_id' => $userIds[$roleCode],
+            ])->first();
+
+            if ($existing === null) {
+                DB::table('project_members')->insert([
+                    'project_id' => $projectId,
+                    'user_id' => $userIds[$roleCode],
                     'role_in_project' => $projectRole,
                     'assigned_by_id' => $userIds['super_admin'],
                     'assigned_at' => now(),
-                ],
-            );
+                    'created_at' => now(),
+                ]);
+
+                continue;
+            }
+
+            if ($existing->role_in_project !== $projectRole) {
+                DB::table('project_members')
+                    ->where('id', $existing->id)
+                    ->update([
+                        'role_in_project' => $projectRole,
+                        'assigned_by_id' => $userIds['super_admin'],
+                        'assigned_at' => now(),
+                    ]);
+            }
         }
     }
 }
