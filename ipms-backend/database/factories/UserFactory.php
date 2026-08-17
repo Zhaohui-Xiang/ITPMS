@@ -72,7 +72,9 @@ class UserFactory extends Factory
     {
         $attributes = $this->canonicalRoleAttributes($code);
 
-        return $this->afterCreating(function (User $user) use ($attributes, $code): void {
+        return $this->state(fn (): array => [
+            'user_type' => $attributes['user_type']->value,
+        ])->afterCreating(function (User $user) use ($attributes, $code): void {
             $role = Role::firstOrCreate(
                 ['code' => $code],
                 [
