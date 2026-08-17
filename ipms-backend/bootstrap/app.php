@@ -1,8 +1,12 @@
 <?php
 
+use App\Support\ApiResponse;
+use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -33,5 +37,22 @@ return Application::configure(basePath: dirname(__DIR__))
         // Return JSON for all API exceptions
         $exceptions->shouldRenderJsonWhen(function () {
             return true;
+        });
+
+        $exceptions->render(function (ValidationException $exception, Request $request) {
+            if ($request->is('api/*')) {
+                return ApiResponse::error(
+                    'VALIDATION_FAILED',
+                    'The given data was invalid.',
+                    422,
+                    $exception->errors(),
+                );
+            }
+        });
+
+        $exceptions->render(function (AuthenticationException $exception, Request $request) {
+            if ($request->is('api/*')) {
+                return ApiResponse::error('UNAUTHENTICATED', 'Unauthenticated.', 401);
+            }
         });
     })->create();

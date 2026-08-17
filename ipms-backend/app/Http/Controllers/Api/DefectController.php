@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Middleware\AuditLogger;
 use App\Http\Requests\StoreDefectRequest;
 use App\Models\Defect;
+use App\Support\ApiResponse;
 use App\Scopes\DefectScope;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -60,25 +61,16 @@ class DefectController extends Controller
         }
 
         // 搜索标题
-        if ($request->has('search')) {
-            $query->where('title', 'like', '%' . $request->input('search') . '%');
+        if ($request->has('keyword')) {
+            $query->where('title', 'like', '%' . $request->input('keyword') . '%');
         }
 
-        $perPage = min($request->integer('per_page', 20), 100);
+        $pageSize = min(max($request->integer('page_size', 20), 1), 100);
         $paginator = $query->orderBy('severity', 'asc')
             ->orderBy('created_at', 'desc')
-            ->paginate($perPage);
+            ->paginate($pageSize);
 
-        return response()->json([
-            'code' => 200,
-            'message' => 'success',
-            'data' => [
-                'items' => $paginator->items(),
-                'total' => $paginator->total(),
-                'page' => $paginator->currentPage(),
-                'per_page' => $paginator->perPage(),
-            ],
-        ]);
+        return ApiResponse::paginated($paginator);
     }
 
     /**

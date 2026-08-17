@@ -8,6 +8,7 @@ use App\Http\Middleware\AuditLogger;
 use App\Http\Requests\StoreTaskRequest;
 use App\Http\Requests\UpdateTaskRequest;
 use App\Models\Task;
+use App\Support\ApiResponse;
 use App\Scopes\TaskScope;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -56,25 +57,16 @@ class TaskController extends Controller
         }
 
         // 搜索标题
-        if ($request->has('search')) {
-            $query->where('title', 'like', '%' . $request->input('search') . '%');
+        if ($request->has('keyword')) {
+            $query->where('title', 'like', '%' . $request->input('keyword') . '%');
         }
 
-        $perPage = min($request->integer('per_page', 20), 100);
+        $pageSize = min(max($request->integer('page_size', 20), 1), 100);
         $paginator = $query->orderBy('due_date', 'asc')
             ->orderBy('priority', 'asc')
-            ->paginate($perPage);
+            ->paginate($pageSize);
 
-        return response()->json([
-            'code' => 200,
-            'message' => 'success',
-            'data' => [
-                'items' => $paginator->items(),
-                'total' => $paginator->total(),
-                'page' => $paginator->currentPage(),
-                'per_page' => $paginator->perPage(),
-            ],
-        ]);
+        return ApiResponse::paginated($paginator);
     }
 
     /**

@@ -12,6 +12,7 @@ use App\Http\Requests\UpdateRequirementRequest;
 use App\Models\Requirement;
 use App\Models\RequirementVersion;
 use App\Models\Task;
+use App\Support\ApiResponse;
 use App\Scopes\RequirementScope;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -57,23 +58,14 @@ class RequirementController extends Controller
         }
 
         // 搜索标题
-        if ($request->has('search')) {
-            $query->where('title', 'like', '%' . $request->input('search') . '%');
+        if ($request->has('keyword')) {
+            $query->where('title', 'like', '%' . $request->input('keyword') . '%');
         }
 
-        $perPage = min($request->integer('per_page', 20), 100);
-        $paginator = $query->orderBy('updated_at', 'desc')->paginate($perPage);
+        $pageSize = min(max($request->integer('page_size', 20), 1), 100);
+        $paginator = $query->orderBy('updated_at', 'desc')->paginate($pageSize);
 
-        return response()->json([
-            'code' => 200,
-            'message' => 'success',
-            'data' => [
-                'items' => $paginator->items(),
-                'total' => $paginator->total(),
-                'page' => $paginator->currentPage(),
-                'per_page' => $paginator->perPage(),
-            ],
-        ]);
+        return ApiResponse::paginated($paginator);
     }
 
     /**

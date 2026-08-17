@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Enums\UserType;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
+use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -80,27 +81,18 @@ class AuditLogController extends Controller
         }
 
         // 搜索
-        if ($request->has('search')) {
-            $search = $request->input('search');
+        if ($request->has('keyword')) {
+            $search = $request->input('keyword');
             $query->where(function ($q) use ($search) {
                 $q->where('target_name', 'like', "%{$search}%")
                     ->orWhere('user_name', 'like', "%{$search}%");
             });
         }
 
-        $perPage = min($request->integer('per_page', 20), 100);
-        $paginator = $query->orderBy('created_at', 'desc')->paginate($perPage);
+        $pageSize = min(max($request->integer('page_size', 20), 1), 100);
+        $paginator = $query->orderBy('created_at', 'desc')->paginate($pageSize);
 
-        return response()->json([
-            'code' => 200,
-            'message' => 'success',
-            'data' => [
-                'items' => $paginator->items(),
-                'total' => $paginator->total(),
-                'page' => $paginator->currentPage(),
-                'per_page' => $paginator->perPage(),
-            ],
-        ]);
+        return ApiResponse::paginated($paginator);
     }
 
     /**
