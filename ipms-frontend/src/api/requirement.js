@@ -40,7 +40,7 @@ export function updateRequirement(id, data) {
 /**
  * 审核需求
  * @param {Number|String} id
- * @param {Object} data - { action: 'approve'|'reject', comment, supplier_id, developer_id }
+ * @param {Object} data - { action: 'approve'|'reject', comment: reject 时必填 }
  */
 export function reviewRequirement(id, data) {
   return request.post(`/requirements/${id}/review`, data)

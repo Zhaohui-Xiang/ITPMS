@@ -56,3 +56,47 @@ export function requirementTransitionPayload(action) {
 export function taskTransitionPayload(action) {
   return statusPayload(taskTransitionStatuses, action, 'task')
 }
+
+export class RequirementActionValidationError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'RequirementActionValidationError'
+  }
+}
+
+export function getRequirementCommentField(action) {
+  if (action === 'reject') {
+    return {
+      label: '驳回备注',
+      placeholder: '请输入驳回原因（必填）',
+      required: true,
+    }
+  }
+
+  return {
+    label: '操作备注',
+    placeholder: '请输入备注（可选）',
+    required: false,
+  }
+}
+
+export function requirementReviewPayload(action, comment) {
+  if (action !== 'approve' && action !== 'reject') {
+    throw new RangeError(`Unsupported requirement review action: ${action}`)
+  }
+
+  const trimmedComment = typeof comment === 'string' ? comment.trim() : ''
+  if (action === 'reject' && !trimmedComment) {
+    throw new RequirementActionValidationError('驳回时必须填写审核意见')
+  }
+
+  return trimmedComment ? { action, comment: trimmedComment } : { action }
+}
+
+export async function executeRequirementAction(id, action, comment, api) {
+  if (action === 'approve' || action === 'reject') {
+    return api.reviewRequirement(id, requirementReviewPayload(action, comment))
+  }
+
+  return api.transitionRequirement(id, requirementTransitionPayload(action))
+}

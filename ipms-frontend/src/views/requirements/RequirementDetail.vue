@@ -12,8 +12,10 @@ import {
 } from '@/api/requirement'
 import { createTask } from '@/api/task'
 import {
+  executeRequirementAction,
+  getRequirementCommentField,
   getRequirementStatusActions,
-  requirementTransitionPayload
+  RequirementActionValidationError
 } from '@/workflows/actionPayloads'
 
 const route = useRoute()
@@ -195,6 +197,8 @@ const actionDialogTitle = computed(() => {
   return `确认${currentAction.value.label}`
 })
 
+const actionCommentField = computed(() => getRequirementCommentField(currentAction.value?.key))
+
 function openActionDialog(action) {
   currentAction.value = action
   actionComment.value = ''
@@ -223,20 +227,20 @@ async function confirmAction() {
   actionLoading.value = true
 
   try {
-    if (action.key === 'approve' || action.key === 'reject') {
-      await reviewRequirement(requirement.value.id, {
-        action: action.key,
-        comment: actionComment.value || undefined
-      })
-    } else {
-      await transitionRequirement(requirement.value.id, requirementTransitionPayload(action.key))
-    }
+    await executeRequirementAction(requirement.value.id, action.key, actionComment.value, {
+      reviewRequirement,
+      transitionRequirement,
+    })
 
     ElMessage.success(`${action.label}操作成功`)
     actionDialogVisible.value = false
     updateLocalStatus(action.key)
   } catch (error) {
-    ElMessage.error(error?.response?.data?.message || error?.message || '操作失败，请重试')
+    if (error instanceof RequirementActionValidationError) {
+      ElMessage.warning(error.message)
+    } else {
+      ElMessage.error(error?.response?.data?.message || error?.message || '操作失败，请重试')
+    }
   } finally {
     actionLoading.value = false
   }
@@ -528,12 +532,12 @@ function openDiffDialog(log) {
       destroy-on-close
     >
       <el-form label-width="80px">
-        <el-form-item label="操作备注">
+        <el-form-item :label="actionCommentField.label" :required="actionCommentField.required">
           <el-input
             v-model="actionComment"
             type="textarea"
             :rows="3"
-            placeholder="请输入备注（可选）"
+            :placeholder="actionCommentField.placeholder"
             maxlength="500"
             show-word-limit
           />
