@@ -22,7 +22,7 @@ export const useAuthStore = defineStore('auth', () => {
     const response = await apiLogin(credentials)
     const payload = response.data.data
     user.value = payload.user
-    return payload
+    return { data: payload }
   }
 
   async function logout() {
