@@ -73,5 +73,5 @@ export function updateProfile(data) {
  * @param {Object} data - { current_password, new_password, new_password_confirmation }
  */
 export function changePassword(data) {
-  return request.put('/user/password', data)
+  return request.put('/settings/password', data)
 }

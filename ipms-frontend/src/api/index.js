@@ -12,29 +12,6 @@ const service = axios.create({
   }
 })
 
-// ===== 请求拦截器 =====
-service.interceptors.request.use(
-  (config) => {
-    // CSRF Token - Laravel Sanctum SPA 认证需要
-    // 从 meta csrf-token 获取（Laravel 会自动注入）
-    const csrfToken = document.querySelector('meta[name="csrf-token"]')
-    if (csrfToken) {
-      config.headers['X-CSRF-TOKEN'] = csrfToken.getAttribute('content')
-    }
-
-    // 如有 token 也加上（API Token 模式备用）
-    const token = localStorage.getItem('ipms_token')
-    if (token) {
-      config.headers['Authorization'] = `Bearer ${token}`
-    }
-
-    return config
-  },
-  (error) => {
-    return Promise.reject(error)
-  }
-)
-
 // ===== 响应拦截器 =====
 service.interceptors.response.use(
   (response) => {
@@ -46,8 +23,6 @@ service.interceptors.response.use(
 
       switch (status) {
         case 401:
-          // 未认证，跳转登录页
-          localStorage.removeItem('ipms_token')
           // 使用 window.location 避免循环依赖 router
           if (window.location.pathname !== '/login') {
             ElMessage.error('登录已过期，请重新登录')

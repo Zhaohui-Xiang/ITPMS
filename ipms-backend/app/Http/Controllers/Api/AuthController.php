@@ -4,9 +4,11 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
@@ -16,46 +18,51 @@ class AuthController extends Controller
      */
     public function login(Request $request): JsonResponse
     {
-        $credentials = $request->validate([
+        $validated = $request->validate([
             'username' => ['required', 'string'],
             'password' => ['required', 'string'],
         ]);
 
-        if (!Auth::attempt(['email' => $credentials['username'], 'password' => $credentials['password']], $request->boolean('remember'))) {
+        $identifier = $validated['username'];
+        $column = filter_var($identifier, FILTER_VALIDATE_EMAIL) !== false ? 'email' : 'username';
+        $user = User::query()
+            ->whereRaw("LOWER({$column}) = LOWER(?)", [$identifier])
+            ->first();
+
+        if (! $user || ! Hash::check($validated['password'], $user->password)) {
             throw ValidationException::withMessages([
                 'username' => ['用户名或密码错误。'],
             ]);
         }
 
-        $user = Auth::user();
-
-        // Check if account is disabled
         if ($user->is_disabled) {
-            Auth::logout();
-            return response()->json([
-                'message' => '账号已被禁用，请联系管理员。',
-            ], 403);
+            return ApiResponse::error(
+                'ACCOUNT_DISABLED',
+                '账号已被禁用，请联系管理员。',
+                403,
+            );
         }
 
-        // Check if account is active
-        if (!$user->is_active) {
-            Auth::logout();
-            return response()->json([
-                'message' => '账号未激活，请联系管理员。',
-            ], 403);
+        if (! $user->is_active) {
+            return ApiResponse::error(
+                'ACCOUNT_INACTIVE',
+                '账号未激活，请联系管理员。',
+                403,
+            );
         }
 
-        $request->session()->regenerate();
+        Auth::guard('web')->login($user, $request->boolean('remember'));
+        if ($request->hasSession()) {
+            $request->session()->regenerate();
+        }
 
-        // Update last login time
         $user->last_login = now();
         $user->save();
 
-        return response()->json([
-            'message' => '登录成功',
+        return ApiResponse::success([
             'user' => $this->formatUser($user),
             'must_change_password' => $user->must_change_password,
-        ]);
+        ], '登录成功');
     }
 
     /**
@@ -64,13 +71,14 @@ class AuthController extends Controller
     public function logout(Request $request): JsonResponse
     {
         Auth::guard('web')->logout();
+        Auth::guard('sanctum')->forgetUser();
 
-        $request->session()->invalidate();
-        $request->session()->regenerateToken();
+        if ($request->hasSession()) {
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+        }
 
-        return response()->json([
-            'message' => '已登出',
-        ]);
+        return ApiResponse::success(message: '已登出');
     }
 
     /**
@@ -78,10 +86,8 @@ class AuthController extends Controller
      */
     public function user(Request $request): JsonResponse
     {
-        $user = $request->user();
-
-        return response()->json([
-            'user' => $this->formatUser($user),
+        return ApiResponse::success([
+            'user' => $this->formatUser($request->user()),
         ]);
     }
 

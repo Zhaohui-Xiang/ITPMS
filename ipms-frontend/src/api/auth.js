@@ -1,10 +1,12 @@
+import axios from 'axios'
 import request from './index'
 
 /**
  * 登录
  * @param {Object} credentials - { username, password }
  */
-export function login(credentials) {
+export async function login(credentials) {
+  await axios.get('/sanctum/csrf-cookie', { withCredentials: true })
   return request.post('/login', credentials)
 }
 
@@ -22,17 +24,4 @@ export function fetchUser() {
   return request.get('/user')
 }
 
-/**
- * 修改密码
- * @param {Object} data - { current_password, new_password, new_password_confirmation }
- */
-export function changePassword(data) {
-  return request.put('/user/password', data)
-}
-
-/**
- * 获取 CSRF Cookie (Sanctum SPA)
- */
-export function getCsrfCookie() {
-  return request.get('/sanctum/csrf-cookie')
-}
+export { changePassword } from './user'

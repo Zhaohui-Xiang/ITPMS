@@ -6,32 +6,22 @@ import router from '@/router'
 export const useAuthStore = defineStore('auth', () => {
   // ======= State =======
   const user = ref(null)
-  const token = ref(localStorage.getItem('ipms_token') || null)
   const isAuthenticated = computed(() => !!user.value)
 
   // ======= Getters =======
-  const currentRole = computed(() => user.value?.role || 'guest')
-
-  const permissions = computed(() => user.value?.permissions || [])
-
-  const userName = computed(() => {
-    if (!user.value) return ''
-    return user.value.name || user.value.username || ''
-  })
-
-  const userType = computed(() => user.value?.user_type || '')
-
-  const isSuperAdmin = computed(() => currentRole.value === 'super_admin')
+  const roles = computed(() => user.value?.roles ?? [])
+  const currentRole = computed(() => roles.value.includes('super_admin') ? 'super_admin' : roles.value[0] ?? 'guest')
+  const permissions = computed(() => user.value?.permissions ?? [])
+  const userName = computed(() => user.value?.display_name || user.value?.username || '')
+  const userType = computed(() => user.value?.user_type ?? null)
+  const isSuperAdmin = computed(() => user.value?.is_super_admin === true || roles.value.includes('super_admin'))
+  const mustChangePassword = computed(() => user.value?.must_change_password === true)
 
   // ======= Actions =======
   async function login(credentials) {
     const response = await apiLogin(credentials)
-    const { user: userData, token: authToken } = response.data
+    const { user: userData } = response.data.data
     user.value = userData
-    if (authToken) {
-      token.value = authToken
-      localStorage.setItem('ipms_token', authToken)
-    }
     return response
   }
 
@@ -42,8 +32,6 @@ export const useAuthStore = defineStore('auth', () => {
       // 即使后端登出失败，也清除前端状态
     } finally {
       user.value = null
-      token.value = null
-      localStorage.removeItem('ipms_token')
       router.push('/login')
     }
   }
@@ -51,12 +39,10 @@ export const useAuthStore = defineStore('auth', () => {
   async function fetchUser() {
     try {
       const response = await apiFetchUser()
-      user.value = response.data
+      user.value = response.data.data.user
       return response
     } catch (error) {
       user.value = null
-      token.value = null
-      localStorage.removeItem('ipms_token')
       throw error
     }
   }
@@ -68,6 +54,10 @@ export const useAuthStore = defineStore('auth', () => {
     return permissions.value.includes(permission)
   }
 
+  function hasRole(code) {
+    return roles.value.includes(code)
+  }
+
   // 检查是否是某种用户类型
   function isUserType(type) {
     return userType.value === type
@@ -76,19 +66,21 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     // State
     user,
-    token,
     isAuthenticated,
     // Getters
+    roles,
     currentRole,
     permissions,
     userName,
     userType,
     isSuperAdmin,
+    mustChangePassword,
     // Actions
     login,
     logout,
     fetchUser,
     hasPermission,
+    hasRole,
     isUserType
   }
 })

@@ -8,10 +8,10 @@ use App\Http\Middleware\AuditLogger;
 use App\Http\Requests\UpdateUserRequest;
 use App\Models\User;
 use App\Support\ApiResponse;
+use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Validation\Rule;
 
 class UserController extends Controller
 {
@@ -80,9 +80,11 @@ class UserController extends Controller
         $canCreate = $currentUser->isSuperAdmin()
             || ($currentUser->user_type === UserType::SUPPLIER->value && $currentUser->hasPermission('user.create'));
 
-        if (!$canCreate) {
+        if (! $canCreate) {
             return response()->json(['code' => 403, 'message' => '您无权创建用户'], 403);
         }
+
+        $this->normalizeEmail($request);
 
         $request->validate([
             'username' => ['required', 'string', 'max:150', 'unique:users,username'],
@@ -90,7 +92,7 @@ class UserController extends Controller
             'first_name' => ['nullable', 'string', 'max:150'],
             'last_name' => ['nullable', 'string', 'max:150'],
             'display_name' => ['nullable', 'string', 'max:100'],
-            'email' => ['nullable', 'email', 'max:254', 'unique:users,email'],
+            'email' => ['nullable', 'email', 'max:254', $this->uniqueEmailRule()],
             'phone' => ['nullable', 'string', 'max:20'],
             'user_type' => ['required', 'integer', 'in:2,3'], // 仅可创建供应商用户和系统用户
             'role_ids' => ['nullable', 'array'],
@@ -164,8 +166,8 @@ class UserController extends Controller
         ])->findOrFail($id);
 
         // 权限检查
-        if (!$currentUser->isSuperAdmin()
-            && !($currentUser->user_type === UserType::SUPPLIER->value && $currentUser->hasPermission('user.view'))
+        if (! $currentUser->isSuperAdmin()
+            && ! ($currentUser->user_type === UserType::SUPPLIER->value && $currentUser->hasPermission('user.view'))
             && $currentUser->id !== $user->id
         ) {
             return response()->json(['code' => 403, 'message' => '您无权查看该用户'], 403);
@@ -218,7 +220,7 @@ class UserController extends Controller
     {
         $currentUser = $request->user();
 
-        if (!$currentUser->isSuperAdmin()) {
+        if (! $currentUser->isSuperAdmin()) {
             return response()->json(['code' => 403, 'message' => '仅超级管理员可以禁用用户'], 403);
         }
 
@@ -257,11 +259,13 @@ class UserController extends Controller
     {
         $user = $request->user();
 
+        $this->normalizeEmail($request);
+
         $request->validate([
             'first_name' => ['nullable', 'string', 'max:150'],
             'last_name' => ['nullable', 'string', 'max:150'],
             'display_name' => ['nullable', 'string', 'max:100'],
-            'email' => ['nullable', 'email', 'max:254', Rule::unique('users', 'email')->ignore($user->id)],
+            'email' => ['nullable', 'email', 'max:254', $this->uniqueEmailRule($user->id)],
             'phone' => ['nullable', 'string', 'max:20'],
         ]);
 
@@ -290,12 +294,13 @@ class UserController extends Controller
         ]);
 
         // 验证当前密码
-        if (!Hash::check($request->input('current_password'), $user->password)) {
-            return response()->json([
-                'code' => 422,
-                'message' => '验证失败',
-                'errors' => ['current_password' => ['当前密码不正确']],
-            ], 422);
+        if (! Hash::check($request->input('current_password'), $user->password)) {
+            return ApiResponse::error(
+                'INVALID_CURRENT_PASSWORD',
+                '验证失败',
+                422,
+                ['current_password' => ['当前密码不正确']],
+            );
         }
 
         $user->update([
@@ -303,9 +308,38 @@ class UserController extends Controller
             'must_change_password' => false,
         ]);
 
-        return response()->json([
-            'code' => 200,
-            'message' => '密码修改成功',
+        return ApiResponse::success(message: '密码修改成功');
+    }
+
+    private function uniqueEmailRule(?int $ignoreUserId = null): Closure
+    {
+        return function (string $attribute, mixed $value, Closure $fail) use ($ignoreUserId): void {
+            if (! is_string($value) || $value === '') {
+                return;
+            }
+
+            $query = User::query()->whereRaw('LOWER(email) = LOWER(?)', [$value]);
+
+            if ($ignoreUserId !== null) {
+                $query->where('id', '<>', $ignoreUserId);
+            }
+
+            if ($query->exists()) {
+                $fail('The email has already been taken.');
+            }
+        };
+    }
+
+    private function normalizeEmail(Request $request): void
+    {
+        if (! $request->has('email')) {
+            return;
+        }
+
+        $email = $request->input('email');
+
+        $request->merge([
+            'email' => is_string($email) && $email !== '' ? strtolower($email) : '',
         ]);
     }
 }
