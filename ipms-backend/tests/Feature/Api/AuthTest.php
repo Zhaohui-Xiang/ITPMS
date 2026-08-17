@@ -145,6 +145,25 @@ final class AuthTest extends TestCase
             ->assertJsonPath('data.must_change_password', false);
     }
 
+    public function test_successful_user_creation_normalizes_mixed_case_email_to_lowercase(): void
+    {
+        $admin = User::factory()->superAdmin()->create();
+
+        $this->actingAs($admin)
+            ->postJson('/api/users', [
+                'username' => 'created.user',
+                'password' => 'Secret123',
+                'email' => 'Created.User@Example.TEST',
+                'user_type' => UserType::SUPPLIER->value,
+            ])
+            ->assertCreated();
+
+        $this->assertDatabaseHas('users', [
+            'username' => 'created.user',
+            'email' => 'created.user@example.test',
+        ]);
+    }
+
     public function test_user_creation_normalizes_email_before_unique_validation(): void
     {
         User::factory()->create(['email' => 'Existing@Example.Test']);
@@ -181,6 +200,37 @@ final class AuthTest extends TestCase
             ->assertJsonStructure(['errors' => ['email']]);
 
         $this->assertSame('unique@example.test', $user->fresh()->email);
+    }
+
+    public function test_admin_user_update_normalizes_unique_mixed_case_email_to_lowercase(): void
+    {
+        $admin = User::factory()->superAdmin()->create();
+        $user = User::factory()->create(['email' => 'original@example.test']);
+
+        $this->actingAs($admin)
+            ->putJson("/api/users/{$user->id}", [
+                'email' => 'Updated.User@Example.TEST',
+            ])
+            ->assertOk();
+
+        $this->assertSame('updated.user@example.test', $user->fresh()->email);
+    }
+
+    public function test_admin_user_update_returns_validation_for_case_insensitive_email_collision(): void
+    {
+        $admin = User::factory()->superAdmin()->create();
+        User::factory()->create(['email' => 'Existing@Example.Test']);
+        $user = User::factory()->create(['email' => 'original@example.test']);
+
+        $this->actingAs($admin)
+            ->putJson("/api/users/{$user->id}", [
+                'email' => 'EXISTING@EXAMPLE.TEST',
+            ])
+            ->assertUnprocessable()
+            ->assertJsonPath('error_code', 'VALIDATION_FAILED')
+            ->assertJsonStructure(['errors' => ['email']]);
+
+        $this->assertSame('original@example.test', $user->fresh()->email);
     }
 
     public function test_nonempty_emails_are_case_insensitively_unique_while_empty_legacy_values_are_allowed(): void
