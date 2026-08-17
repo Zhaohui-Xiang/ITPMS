@@ -15,5 +15,9 @@ class DatabaseSeeder extends Seeder
             OrganizationSeeder::class,
             AdminUserSeeder::class,
         ]);
+
+        if (config('ipms.seed_demo')) {
+            $this->call(DemoWorkflowSeeder::class);
+        }
     }
 }
