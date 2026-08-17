@@ -11,7 +11,10 @@ const { csrfGet, mockFetchUser, mockLogin, mockLogout, mockPush, requestPost } =
   requestPost: vi.fn(),
 }))
 
-vi.mock('axios', () => ({ default: { get: csrfGet } }))
+vi.mock('axios', async (importActual) => {
+  const axios = await importActual()
+  return { default: Object.assign(axios.default, { get: csrfGet }) }
+})
 vi.mock('@/api/index', () => ({ default: { post: requestPost } }))
 vi.mock('@/api/auth', () => ({
   login: mockLogin,
@@ -47,6 +50,15 @@ describe('auth store', () => {
 
     expect(csrfGet).toHaveBeenCalledWith('/sanctum/csrf-cookie', { withCredentials: true })
     expect(requestPost).toHaveBeenCalledWith('/login', credentials)
+  })
+
+  it('configures the real Axios client for credentials without bearer authorization', async () => {
+    const { default: service } = await vi.importActual('@/api/index')
+
+    expect(service.defaults.withCredentials).toBe(true)
+    expect(service.defaults.headers.common).not.toHaveProperty('Authorization')
+    expect(service.defaults.headers.common).not.toHaveProperty('authorization')
+    expect(JSON.stringify(service.defaults.headers)).not.toContain('Bearer')
   })
 
   it('stores the session user without localStorage token data', async () => {
