@@ -1,0 +1,30 @@
+# Local configuration and secrets
+**/.env
+**/.env.*
+!**/.env.example
+
+# Dependencies and build output
+**/node_modules/
+**/vendor/
+**/dist/
+**/build/
+**/coverage/
+
+# Runtime and test artifacts
+**/storage/logs/*.log
+**/.phpunit.result.cache
+**/npm-debug.log*
+**/yarn-error.log*
+**/pnpm-debug.log*
+
+# IDE and operating-system files
+.idea/
+.vscode/
+.fleet/
+.DS_Store
+Thumbs.db
+
+# Superpowers scratch work
+.superpowers/brainstorm/
+.superpowers/sdd/
+.worktrees/
