@@ -74,8 +74,8 @@ final class DemoWorkflowSeederTest extends TestCase
         }
 
         $this->assertDatabaseCount('projects', 2);
-        $this->assertDatabaseHas('projects', ['name' => '核心业务平台']);
-        $this->assertDatabaseHas('projects', ['name' => '协同办公平台']);
+        $this->assertDatabaseHas('projects', ['name' => '[DEMO] 核心业务平台']);
+        $this->assertDatabaseHas('projects', ['name' => '[DEMO] 协同办公平台']);
 
         $internalMemberIds = DB::table('users')
             ->whereIn('username', ['demo.it_pm', 'demo.it_member'])

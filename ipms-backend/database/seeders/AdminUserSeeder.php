@@ -18,9 +18,17 @@ class AdminUserSeeder extends Seeder
         }
 
         DB::transaction(function () use ($password): void {
-            DB::table('users')->updateOrInsert(
-                ['username' => 'admin'],
-                [
+            $roleId = DB::table('roles')->where('code', 'super_admin')->value('id');
+
+            if ($roleId === null) {
+                throw new LogicException('The super_admin role is required to seed the administrator.');
+            }
+
+            $userId = DB::table('users')->where('username', 'admin')->value('id');
+
+            if ($userId === null) {
+                $userId = DB::table('users')->insertGetId([
+                    'username' => 'admin',
                     'password' => Hash::make($password),
                     'user_type' => 1,
                     'display_name' => '系统管理员',
@@ -32,15 +40,9 @@ class AdminUserSeeder extends Seeder
                     'must_change_password' => true,
                     'is_disabled' => false,
                     'created_by_id' => null,
+                    'created_at' => now(),
                     'updated_at' => now(),
-                ],
-            );
-
-            $userId = DB::table('users')->where('username', 'admin')->value('id');
-            $roleId = DB::table('roles')->where('code', 'super_admin')->value('id');
-
-            if ($roleId === null) {
-                throw new LogicException('The super_admin role is required to seed the administrator.');
+                ]);
             }
 
             DB::table('role_user')->updateOrInsert(
@@ -48,10 +50,13 @@ class AdminUserSeeder extends Seeder
                 ['assigned_by_id' => null, 'assigned_at' => now()],
             );
 
-            DB::table('notification_configs')->updateOrInsert(
-                ['user_id' => $userId],
-                ['remind_enabled' => true, 'remind_days_before' => 1, 'updated_at' => now()],
-            );
+            DB::table('notification_configs')->insertOrIgnore([
+                'user_id' => $userId,
+                'remind_enabled' => true,
+                'remind_days_before' => 1,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
         });
     }
 }
