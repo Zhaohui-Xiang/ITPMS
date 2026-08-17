@@ -35,8 +35,7 @@ class User extends Authenticatable
     public function roles(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
     {
         return $this->belongsToMany(Role::class, 'role_user')
-            ->withPivot('assigned_by_id', 'assigned_at')
-            ->withTimestamps();
+            ->withPivot('assigned_by_id', 'assigned_at');
     }
 
     public function organizations(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
