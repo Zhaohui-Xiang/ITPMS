@@ -25,14 +25,10 @@ import {
 } from '@element-plus/icons-vue'
 import {
   listDocuments,
-  getDocumentTree,
   uploadDocument,
   createFolder,
   downloadDocument,
   deleteDocument,
-  listTrashDocuments,
-  restoreDocument,
-  forceDeleteDocument
 } from '@/api/document'
 import {
   listApiDocuments,

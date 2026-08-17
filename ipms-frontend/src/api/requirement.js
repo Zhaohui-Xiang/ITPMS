@@ -43,7 +43,7 @@ export function updateRequirement(id, data) {
  * @param {Object} data - { action: 'approve'|'reject', comment, supplier_id, developer_id }
  */
 export function reviewRequirement(id, data) {
-  return request.put(`/requirements/${id}/review`, data)
+  return request.post(`/requirements/${id}/review`, data)
 }
 
 /**
@@ -53,7 +53,7 @@ export function reviewRequirement(id, data) {
  *  action: start_dev | complete_dev | pass_test | fail_test | confirm_online | confirm_accept
  */
 export function transitionRequirement(id, data) {
-  return request.put(`/requirements/${id}/status`, data)
+  return request.post(`/requirements/${id}/status`, data)
 }
 
 /**
@@ -62,20 +62,4 @@ export function transitionRequirement(id, data) {
  */
 export function getRequirementVersions(id) {
   return request.get(`/requirements/${id}/versions`)
-}
-
-/**
- * 获取需求子任务列表
- * @param {Number|String} id
- */
-export function getRequirementTasks(id) {
-  return request.get(`/requirements/${id}/tasks`)
-}
-
-/**
- * 获取需求关联缺陷
- * @param {Number|String} id
- */
-export function getRequirementDefects(id) {
-  return request.get(`/requirements/${id}/defects`)
 }

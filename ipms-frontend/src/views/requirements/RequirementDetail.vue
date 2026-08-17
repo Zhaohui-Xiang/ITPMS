@@ -8,9 +8,7 @@ import {
   getRequirement,
   transitionRequirement,
   reviewRequirement,
-  getRequirementVersions,
-  getRequirementTasks,
-  getRequirementDefects
+  getRequirementVersions
 } from '@/api/requirement'
 import { createTask } from '@/api/task'
 

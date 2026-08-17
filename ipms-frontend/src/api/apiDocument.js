@@ -6,10 +6,11 @@ import request from './index'
 
 /**
  * 获取接口文档列表
- * @param {Object} params - { project_id, folder_id, keyword, page, pageSize }
+ * @param {Number|String} projectId
+ * @param {Object} params - { folder_id, keyword, page, pageSize }
  */
-export function listApiDocuments(params) {
-  return request.get('/api-documents', { params })
+export function listApiDocuments(projectId, params) {
+  return request.get(`/projects/${projectId}/api-docs`, { params })
 }
 
 /**
@@ -17,20 +18,21 @@ export function listApiDocuments(params) {
  * @param {Number|String} id
  */
 export function getApiDocument(id) {
-  return request.get(`/api-documents/${id}`)
+  return request.get(`/api-docs/${id}`)
 }
 
 /**
  * 创建接口文档
+ * @param {Number|String} projectId
  * @param {Object} data - {
- *   name, path, method, project_id, folder_id, requirement_id,
+ *   name, path, method, folder_id, requirement_id,
  *   request_params: [{ name, type, required, description }],
  *   response_params: [{ name, type, description }],
  *   auth_type, request_example, response_example, notes
  * }
  */
-export function createApiDocument(data) {
-  return request.post('/api-documents', data)
+export function createApiDocument(projectId, data) {
+  return request.post(`/projects/${projectId}/api-docs`, data)
 }
 
 /**
@@ -39,7 +41,7 @@ export function createApiDocument(data) {
  * @param {Object} data
  */
 export function updateApiDocument(id, data) {
-  return request.put(`/api-documents/${id}`, data)
+  return request.put(`/api-docs/${id}`, data)
 }
 
 /**
@@ -47,7 +49,7 @@ export function updateApiDocument(id, data) {
  * @param {Number|String} id
  */
 export function getApiDocumentVersions(id) {
-  return request.get(`/api-documents/${id}/versions`)
+  return request.get(`/api-docs/${id}/versions`)
 }
 
 /**
@@ -56,8 +58,5 @@ export function getApiDocumentVersions(id) {
  * @param {String} format - 'json' | 'markdown' | 'html'
  */
 export function exportApiDocument(id, format = 'json') {
-  return request.get(`/api-documents/${id}/export`, {
-    params: { format },
-    responseType: format === 'json' ? 'json' : 'blob'
-  })
+  return request.post(`/api-docs/${id}/export`, { format })
 }

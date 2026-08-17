@@ -13,14 +13,6 @@ export function listTasks(params) {
 }
 
 /**
- * 获取我的任务列表
- * @param {Object} params
- */
-export function listMyTasks(params) {
-  return request.get('/tasks/my', { params })
-}
-
-/**
  * 获取任务详情
  * @param {Number|String} id
  */
@@ -50,7 +42,7 @@ export function updateTask(id, data) {
  * @param {Number|String} id
  */
 export function claimTask(id) {
-  return request.put(`/tasks/${id}/claim`)
+  return request.post(`/tasks/${id}/claim`)
 }
 
 /**
@@ -59,7 +51,7 @@ export function claimTask(id) {
  * @param {Object} data - { action: 'start'|'complete'|'suspend'|'resume', comment }
  */
 export function transitionTask(id, data) {
-  return request.put(`/tasks/${id}/status`, data)
+  return request.post(`/tasks/${id}/status`, data)
 }
 
 /**
@@ -68,5 +60,5 @@ export function transitionTask(id, data) {
  * @param {Object} data - { reason }
  */
 export function holdTask(id, data) {
-  return request.put(`/tasks/${id}/hold`, data)
+  return request.post(`/tasks/${id}/hold`, data)
 }

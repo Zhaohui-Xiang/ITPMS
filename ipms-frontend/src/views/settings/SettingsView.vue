@@ -1,7 +1,6 @@
 <script setup>
 import { ref, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
-import { sendTestEmail } from '@/api/notification'
 
 // ── Active section tracking ──────────────────────────────────────────────
 const activeSection = ref('general')
@@ -65,7 +64,6 @@ const notificationForm = reactive({
   remindEnabled: true,
   dailyRemindTime: '09:00',
   defaultRemindDays: 3,
-  testEmailRecipient: ''
 })
 
 const encryptionOptions = [
@@ -74,31 +72,6 @@ const encryptionOptions = [
   { label: 'NONE', value: 'NONE' }
 ]
 
-const testEmailLoading = ref(false)
-
-async function handleTestEmail() {
-  if (!notificationForm.testEmailRecipient) {
-    ElMessage.warning('请输入测试接收邮箱')
-    return
-  }
-  testEmailLoading.value = true
-  try {
-    await sendTestEmail({
-      smtpHost: notificationForm.smtpHost,
-      smtpPort: notificationForm.smtpPort,
-      smtpUsername: notificationForm.smtpUsername,
-      smtpPassword: notificationForm.smtpPassword,
-      encryption: notificationForm.encryption,
-      senderAddress: notificationForm.senderAddress,
-      recipient: notificationForm.testEmailRecipient
-    })
-    ElMessage.success('测试邮件已发送，请检查收件箱')
-  } catch (error) {
-    ElMessage.error('测试邮件发送失败：' + (error.message || '未知错误'))
-  } finally {
-    testEmailLoading.value = false
-  }
-}
 
 // ── 安全设置 ────────────────────────────────────────────────────────────
 const securityForm = reactive({
@@ -298,19 +271,6 @@ function handleSave(section) {
                 <div class="form-hint">任务截止日期前 N 天开始提醒</div>
               </el-form-item>
 
-              <el-divider content-position="left">测试邮箱</el-divider>
-
-              <el-form-item label="测试接收邮箱">
-                <el-input v-model="notificationForm.testEmailRecipient" style="width: 300px" placeholder="test@company.com" />
-                <el-button
-                  type="warning"
-                  :loading="testEmailLoading"
-                  style="margin-left: 12px"
-                  @click="handleTestEmail"
-                >
-                  发送测试邮件
-                </el-button>
-              </el-form-item>
 
               <el-form-item>
                 <el-button type="primary" @click="handleSave('notification')">保存配置</el-button>

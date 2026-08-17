@@ -43,7 +43,7 @@ export function updateDefect(id, data) {
  * @param {Object} data - { assignee_id, comment }
  */
 export function confirmDefect(id, data) {
-  return request.put(`/defects/${id}/confirm`, data)
+  return request.post(`/defects/${id}/confirm`, data)
 }
 
 /**
@@ -52,7 +52,7 @@ export function confirmDefect(id, data) {
  * @param {Object} data - { assignee_id }
  */
 export function assignDefect(id, data) {
-  return request.put(`/defects/${id}/assign`, data)
+  return request.post(`/defects/${id}/assign`, data)
 }
 
 /**
@@ -61,7 +61,7 @@ export function assignDefect(id, data) {
  * @param {Object} data - { fix_description }
  */
 export function resolveDefect(id, data) {
-  return request.put(`/defects/${id}/resolve`, data)
+  return request.post(`/defects/${id}/resolve`, data)
 }
 
 /**
@@ -70,7 +70,7 @@ export function resolveDefect(id, data) {
  * @param {Object} data - { action: 'pass'|'fail', comment }
  */
 export function verifyDefect(id, data) {
-  return request.put(`/defects/${id}/verify`, data)
+  return request.post(`/defects/${id}/verify`, data)
 }
 
 /**
@@ -79,5 +79,5 @@ export function verifyDefect(id, data) {
  * @param {Object} data - { reason }
  */
 export function reopenDefect(id, data) {
-  return request.put(`/defects/${id}/reopen`, data)
+  return request.post(`/defects/${id}/reopen`, data)
 }

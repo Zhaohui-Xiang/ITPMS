@@ -42,22 +42,7 @@ export function updateUser(id, data) {
  * @param {Number|String} id
  */
 export function disableUser(id) {
-  return request.put(`/users/${id}/disable`)
-}
-
-/**
- * 启用用户
- * @param {Number|String} id
- */
-export function enableUser(id) {
-  return request.put(`/users/${id}/enable`)
-}
-
-/**
- * 获取用户个人信息
- */
-export function getUserProfile() {
-  return request.get('/user/profile')
+  return request.post(`/users/${id}/disable`)
 }
 
 /**
@@ -65,7 +50,7 @@ export function getUserProfile() {
  * @param {Object} data - { name, email }
  */
 export function updateProfile(data) {
-  return request.put('/user/profile', data)
+  return request.put('/settings/profile', data)
 }
 
 /**

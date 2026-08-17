@@ -26,18 +26,3 @@ export function getRecentTasks(params) {
 export function getRecentRequirements(params) {
   return request.get('/dashboard/recent-requirements', { params })
 }
-
-/**
- * 获取近期动态
- * @param {Object} params - { limit }
- */
-export function getRecentActivities(params) {
-  return request.get('/dashboard/recent-activities', { params })
-}
-
-/**
- * 获取项目概览（项目进度等）
- */
-export function getProjectOverview() {
-  return request.get('/dashboard/project-overview')
-}

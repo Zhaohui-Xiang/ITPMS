@@ -51,13 +51,5 @@ export function deleteProject(id) {
  * @param {Number|String} id
  */
 export function archiveProject(id) {
-  return request.put(`/projects/${id}/archive`)
-}
-
-/**
- * 检查项目是否可删除（关联需求检查）
- * @param {Number|String} id
- */
-export function checkProjectDeletable(id) {
-  return request.get(`/projects/${id}/deletable`)
+  return request.post(`/projects/${id}/archive`)
 }
