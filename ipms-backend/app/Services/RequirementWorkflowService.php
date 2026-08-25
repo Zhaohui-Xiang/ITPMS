@@ -4,14 +4,18 @@ namespace App\Services;
 
 use App\Enums\ProjectDeliveryStatus;
 use App\Enums\RequirementStatus;
+use App\Exceptions\DomainConflictException;
+use App\Http\Middleware\AuditLogger;
 use App\Models\ProjectVersionHistory;
 use App\Models\Requirement;
 use App\Models\RequirementProject;
 use App\Models\RequirementVersion;
 use App\Models\User;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
 
 class RequirementWorkflowService
@@ -22,16 +26,15 @@ class RequirementWorkflowService
         'priority',
         'requirement_type',
         'expected_completion_date',
+        'dev_lead_id',
     ];
 
     public function submit(array $data, User $actor): Requirement
     {
         return DB::transaction(function () use ($data, $actor): Requirement {
             $projectIds = $this->normalizeProjectIds($data['project_ids'] ?? []);
-            $attributes = Arr::only($data, self::EDITABLE_FIELDS);
-
             $requirement = Requirement::query()->create([
-                ...$attributes,
+                ...Arr::only($data, self::EDITABLE_FIELDS),
                 'submitter_id' => $actor->id,
                 'submitted_at' => now(),
                 'status' => RequirementStatus::PENDING_REVIEW->value,
@@ -40,18 +43,79 @@ class RequirementWorkflowService
             ]);
 
             foreach ($projectIds as $projectId) {
-                RequirementProject::query()->create([
-                    'requirement_id' => $requirement->id,
-                    'project_id' => $projectId,
-                    'delivery_status' => ProjectDeliveryStatus::ASSIGNED,
-                ]);
+                $this->createProjectLink($requirement, $projectId);
             }
 
-            return $requirement->fresh([
-                'submitter:id,display_name',
-                'projects:id,name',
-                'projectLinks',
-            ]);
+            $this->audit($actor, $requirement, 1);
+
+            return $this->freshRequirement($requirement);
+        });
+    }
+
+    public function update(
+        Requirement $requirement,
+        User $actor,
+        array $data,
+    ): Requirement {
+        return DB::transaction(function () use ($requirement, $actor, $data): Requirement {
+            $locked = $this->lockRequirement($requirement);
+
+            if ($locked->isRejectedForResubmission()) {
+                return $this->resubmitLocked($locked, $actor, $data);
+            }
+
+            $projectIds = null;
+            $oldProjectIds = null;
+
+            if (array_key_exists('project_ids', $data)) {
+                if ($locked->status !== RequirementStatus::PENDING_REVIEW->value) {
+                    throw new DomainConflictException(
+                        'REQUIREMENT_PROJECT_SCOPE_LOCKED',
+                        'Project links cannot be changed after requirement approval.',
+                    );
+                }
+
+                if ($locked->submitter_id !== $actor->id) {
+                    throw new AuthorizationException(
+                        'Only the original requester may change linked projects.',
+                    );
+                }
+
+                $projectIds = $this->normalizeProjectIds($data['project_ids']);
+                $oldProjectIds = $this->lockedProjectIds($locked);
+            }
+
+            $changes = $this->revisionChanges(
+                $locked,
+                $data,
+                $projectIds,
+                $oldProjectIds,
+            );
+
+            if ($changes !== []) {
+                $newVersion = $locked->version + 1;
+                $locked->update([
+                    ...Arr::only($data, self::EDITABLE_FIELDS),
+                    'version' => $newVersion,
+                    'updated_by_id' => $actor->id,
+                ]);
+
+                if ($projectIds !== null && $oldProjectIds !== $projectIds) {
+                    $this->synchronizeProjectLinks($locked, $projectIds);
+                }
+
+                $this->createRevisionSnapshot(
+                    $locked,
+                    $newVersion,
+                    $actor,
+                    $changes,
+                    'Requirement updated',
+                );
+            }
+
+            $this->audit($actor, $locked, 2, ['changes' => $changes]);
+
+            return $this->freshRequirement($locked);
         });
     }
 
@@ -73,12 +137,7 @@ class RequirementWorkflowService
             ]);
         }
 
-        return DB::transaction(function () use (
-            $requirement,
-            $reviewer,
-            $action,
-            $comment,
-        ): Requirement {
+        return DB::transaction(function () use ($requirement, $reviewer, $action, $comment): Requirement {
             $locked = $this->lockRequirement($requirement);
 
             if ($locked->status !== RequirementStatus::PENDING_REVIEW->value) {
@@ -102,10 +161,15 @@ class RequirementWorkflowService
             ]);
 
             if ($action === 'approve') {
-                $this->initializeApprovedProjects($locked, $reviewer);
+                $this->initializeApprovedProjectsLocked($locked, $reviewer);
             }
 
-            return $locked->fresh(['projectLinks']);
+            $this->audit($reviewer, $locked, 5, [
+                'action' => $action,
+                'comment' => $comment,
+            ]);
+
+            return $this->freshRequirement($locked);
         });
     }
 
@@ -115,56 +179,11 @@ class RequirementWorkflowService
         array $data,
     ): Requirement {
         return DB::transaction(function () use ($requirement, $requester, $data): Requirement {
-            $locked = $this->lockRequirement($requirement);
-
-            if ($locked->submitter_id !== $requester->id) {
-                throw new AuthorizationException(
-                    'Only the original requester may resubmit this requirement.',
-                );
-            }
-
-            if (! $locked->isRejectedForResubmission()) {
-                throw ValidationException::withMessages([
-                    'requirement' => 'Only a rejected requirement may be resubmitted.',
-                ]);
-            }
-
-            $projectIds = array_key_exists('project_ids', $data)
-                ? $this->normalizeProjectIds($data['project_ids'])
-                : $locked->projectLinks()->orderBy('project_id')->pluck('project_id')->all();
-
-            $changes = $this->revisionChanges($locked, $data, $projectIds);
-            $newVersion = $locked->version + 1;
-            $attributes = Arr::only($data, self::EDITABLE_FIELDS);
-
-            $locked->update([
-                ...$attributes,
-                'status' => RequirementStatus::PENDING_REVIEW->value,
-                'reviewer_id' => null,
-                'review_comment' => null,
-                'reviewed_at' => null,
-                'submitted_at' => now(),
-                'version' => $newVersion,
-                'updated_by_id' => $requester->id,
-            ]);
-
-            $this->synchronizeProjectLinks($locked, $projectIds);
-
-            RequirementVersion::query()->create([
-                'requirement_id' => $locked->id,
-                'version_number' => $newVersion,
-                'changed_by_id' => $requester->id,
-                'changed_at' => now(),
-                'changes' => $changes,
-                'change_summary' => 'Requirement resubmitted',
-            ]);
-
-            return $locked->fresh([
-                'submitter:id,display_name',
-                'reviewer:id,display_name',
-                'projects:id,name',
-                'projectLinks',
-            ]);
+            return $this->resubmitLocked(
+                $this->lockRequirement($requirement),
+                $requester,
+                $data,
+            );
         });
     }
 
@@ -173,30 +192,10 @@ class RequirementWorkflowService
         User $actor,
     ): RequirementStatus {
         return DB::transaction(function () use ($requirement, $actor): RequirementStatus {
-            $locked = $this->lockRequirement($requirement);
-            $links = $locked->projectLinks()
-                ->orderBy('id')
-                ->lockForUpdate()
-                ->get();
-
-            if ($links->isEmpty()) {
-                throw ValidationException::withMessages([
-                    'project_ids' => 'An approved requirement must have at least one project.',
-                ]);
-            }
-
-            foreach ($links as $link) {
-                $link->update([
-                    'delivery_status' => ProjectDeliveryStatus::ASSIGNED,
-                ]);
-            }
-
-            $locked->update([
-                'status' => RequirementStatus::ASSIGNED->value,
-                'updated_by_id' => $actor->id,
-            ]);
-
-            return RequirementStatus::ASSIGNED;
+            return $this->initializeApprovedProjectsLocked(
+                $this->lockRequirement($requirement),
+                $actor,
+            );
         });
     }
 
@@ -206,12 +205,7 @@ class RequirementWorkflowService
         ProjectDeliveryStatus|int $targetStatus,
         User $actor,
     ): RequirementProject {
-        return DB::transaction(function () use (
-            $requirement,
-            $projectId,
-            $targetStatus,
-            $actor,
-        ): RequirementProject {
+        return DB::transaction(function () use ($requirement, $projectId, $targetStatus, $actor): RequirementProject {
             $lockedRequirement = $this->lockRequirement($requirement);
 
             if ($lockedRequirement->status === RequirementStatus::PENDING_REVIEW->value) {
@@ -230,6 +224,11 @@ class RequirementWorkflowService
                     'project_id' => 'The project is not linked to this requirement.',
                 ]);
             }
+
+            Gate::forUser($actor)->authorize('transitionProject', [
+                $lockedRequirement,
+                $link->project()->firstOrFail(),
+            ]);
 
             $target = $targetStatus instanceof ProjectDeliveryStatus
                 ? $targetStatus
@@ -266,7 +265,11 @@ class RequirementWorkflowService
                 ]);
             }
 
-            $this->recalculateAggregateStatus($lockedRequirement);
+            $this->recalculateAggregateStatusLocked($lockedRequirement);
+            $this->audit($actor, $lockedRequirement, 4, [
+                'project_id' => $projectId,
+                'to_delivery_status' => $target->value,
+            ]);
 
             return $link->fresh();
         });
@@ -274,22 +277,116 @@ class RequirementWorkflowService
 
     public function recalculateAggregateStatus(Requirement $requirement): RequirementStatus
     {
-        $requirement->refresh();
+        return DB::transaction(function () use ($requirement): RequirementStatus {
+            return $this->recalculateAggregateStatusLocked(
+                $this->lockRequirement($requirement),
+            );
+        });
+    }
 
-        if ($requirement->status === RequirementStatus::PENDING_REVIEW->value) {
+    private function resubmitLocked(
+        Requirement $locked,
+        User $requester,
+        array $data,
+    ): Requirement {
+        if ($locked->submitter_id !== $requester->id) {
+            throw new AuthorizationException(
+                'Only the original requester may resubmit this requirement.',
+            );
+        }
+
+        if (! $locked->isRejectedForResubmission()) {
+            throw ValidationException::withMessages([
+                'requirement' => 'Only a rejected requirement may be resubmitted.',
+            ]);
+        }
+
+        $oldProjectIds = $this->lockedProjectIds($locked);
+        $projectIds = array_key_exists('project_ids', $data)
+            ? $this->normalizeProjectIds($data['project_ids'])
+            : $oldProjectIds;
+        $changes = $this->revisionChanges($locked, $data, $projectIds, $oldProjectIds);
+        $newVersion = $locked->version + 1;
+
+        $locked->update([
+            ...Arr::only($data, self::EDITABLE_FIELDS),
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+            'reviewer_id' => null,
+            'review_comment' => null,
+            'reviewed_at' => null,
+            'submitted_at' => now(),
+            'version' => $newVersion,
+            'updated_by_id' => $requester->id,
+        ]);
+
+        $this->synchronizeProjectLinks($locked, $projectIds);
+        $this->createRevisionSnapshot(
+            $locked,
+            $newVersion,
+            $requester,
+            $changes,
+            'Requirement resubmitted',
+        );
+        $this->audit($requester, $locked, 2, [
+            'version' => $newVersion,
+            'changes' => $changes,
+        ]);
+
+        return $this->freshRequirement($locked);
+    }
+
+    private function initializeApprovedProjectsLocked(
+        Requirement $locked,
+        User $actor,
+    ): RequirementStatus {
+        $links = $locked->projectLinks()
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get();
+
+        if ($links->isEmpty()) {
+            throw ValidationException::withMessages([
+                'project_ids' => 'An approved requirement must have at least one project.',
+            ]);
+        }
+
+        foreach ($links as $link) {
+            $link->update(['delivery_status' => ProjectDeliveryStatus::ASSIGNED]);
+        }
+
+        $locked->update([
+            'status' => RequirementStatus::ASSIGNED->value,
+            'updated_by_id' => $actor->id,
+        ]);
+
+        return RequirementStatus::ASSIGNED;
+    }
+
+    private function recalculateAggregateStatusLocked(
+        Requirement $locked,
+    ): RequirementStatus {
+        if ($locked->status === RequirementStatus::PENDING_REVIEW->value) {
             return RequirementStatus::PENDING_REVIEW;
         }
 
-        $minimum = $requirement->projectLinks()->min('delivery_status');
+        $links = $locked->projectLinks()
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get();
 
-        if ($minimum === null) {
-            return RequirementStatus::from($requirement->status);
+        if ($links->isEmpty()) {
+            throw ValidationException::withMessages([
+                'project_ids' => 'An approved requirement must have at least one project.',
+            ]);
         }
 
-        $status = RequirementStatus::from((int) $minimum);
+        $minimum = $links->min(
+            static fn (RequirementProject $link): int => $link->delivery_status->value,
+        );
+        $status = RequirementStatus::from($minimum);
 
-        if ($requirement->status !== $status->value) {
-            $requirement->update(['status' => $status->value]);
+        if ($locked->status !== $status->value) {
+            $locked->update(['status' => $status->value]);
         }
 
         return $status;
@@ -311,6 +408,7 @@ class RequirementWorkflowService
         $normalized = collect($projectIds)
             ->map(static fn (mixed $projectId): int => (int) $projectId)
             ->unique()
+            ->sort()
             ->values()
             ->all();
 
@@ -324,13 +422,28 @@ class RequirementWorkflowService
     }
 
     /**
-     * @param  list<int>  $projectIds
+     * @return list<int>
+     */
+    private function lockedProjectIds(Requirement $requirement): array
+    {
+        return $requirement->projectLinks()
+            ->orderBy('project_id')
+            ->lockForUpdate()
+            ->pluck('project_id')
+            ->map(static fn (mixed $projectId): int => (int) $projectId)
+            ->all();
+    }
+
+    /**
+     * @param  list<int>|null  $projectIds
+     * @param  list<int>|null  $oldProjectIds
      * @return list<array{field: string, old_value: mixed, new_value: mixed}>
      */
     private function revisionChanges(
         Requirement $requirement,
         array $data,
-        array $projectIds,
+        ?array $projectIds,
+        ?array $oldProjectIds,
     ): array {
         $changes = [];
 
@@ -339,10 +452,12 @@ class RequirementWorkflowService
                 continue;
             }
 
+            $candidate = clone $requirement;
+            $candidate->setAttribute($field, $data[$field]);
             $oldValue = $requirement->getAttribute($field);
-            $newValue = $data[$field];
+            $newValue = $candidate->getAttribute($field);
 
-            if ($oldValue != $newValue) {
+            if ($candidate->isDirty($field)) {
                 $changes[] = [
                     'field' => $field,
                     'old_value' => $oldValue,
@@ -351,22 +466,12 @@ class RequirementWorkflowService
             }
         }
 
-        if (array_key_exists('project_ids', $data)) {
-            $oldProjectIds = $requirement->projectLinks()
-                ->orderBy('project_id')
-                ->pluck('project_id')
-                ->map(static fn (mixed $projectId): int => (int) $projectId)
-                ->all();
-            $newProjectIds = $projectIds;
-            sort($newProjectIds);
-
-            if ($oldProjectIds !== $newProjectIds) {
-                $changes[] = [
-                    'field' => 'project_ids',
-                    'old_value' => $oldProjectIds,
-                    'new_value' => $newProjectIds,
-                ];
-            }
+        if ($projectIds !== null && $oldProjectIds !== $projectIds) {
+            $changes[] = [
+                'field' => 'project_ids',
+                'old_value' => $oldProjectIds,
+                'new_value' => $projectIds,
+            ];
         }
 
         return $changes;
@@ -392,22 +497,80 @@ class RequirementWorkflowService
                 continue;
             }
 
-            $link->update([
-                'delivery_status' => ProjectDeliveryStatus::ASSIGNED,
-            ]);
+            $link->update(['delivery_status' => ProjectDeliveryStatus::ASSIGNED]);
         }
 
         foreach ($projectIds as $projectId) {
-            if ($links->has($projectId)) {
-                continue;
+            if (! $links->has($projectId)) {
+                $this->createProjectLink($requirement, $projectId);
             }
-
-            RequirementProject::query()->create([
-                'requirement_id' => $requirement->id,
-                'project_id' => $projectId,
-                'delivery_status' => ProjectDeliveryStatus::ASSIGNED,
-            ]);
         }
+    }
+
+    private function createProjectLink(Requirement $requirement, int $projectId): void
+    {
+        RequirementProject::query()->create([
+            'requirement_id' => $requirement->id,
+            'project_id' => $projectId,
+            'delivery_status' => ProjectDeliveryStatus::ASSIGNED,
+        ]);
+    }
+
+    /**
+     * @param  list<array{field: string, old_value: mixed, new_value: mixed}>  $changes
+     */
+    private function createRevisionSnapshot(
+        Requirement $requirement,
+        int $version,
+        User $actor,
+        array $changes,
+        string $summary,
+    ): void {
+        try {
+            RequirementVersion::query()->create([
+                'requirement_id' => $requirement->id,
+                'version_number' => $version,
+                'changed_by_id' => $actor->id,
+                'changed_at' => now(),
+                'changes' => $changes,
+                'change_summary' => $summary,
+            ]);
+        } catch (UniqueConstraintViolationException $exception) {
+            throw new DomainConflictException(
+                'REQUIREMENT_VERSION_CONFLICT',
+                'The requirement was revised concurrently. Reload and try again.',
+                $exception,
+            );
+        }
+    }
+
+    private function audit(
+        User $actor,
+        Requirement $requirement,
+        int $actionType,
+        ?array $detail = null,
+    ): void {
+        AuditLogger::log($actor->id, [
+            'user_name' => $actor->username,
+            'user_display_name' => $actor->display_name,
+            'user_type' => $actor->user_type,
+            'module' => 2,
+            'action_type' => $actionType,
+            'target_type' => 'requirement',
+            'target_id' => $requirement->id,
+            'target_name' => $requirement->title,
+            'detail' => $detail,
+        ]);
+    }
+
+    private function freshRequirement(Requirement $requirement): Requirement
+    {
+        return $requirement->fresh([
+            'submitter:id,display_name',
+            'reviewer:id,display_name',
+            'projects:id,name',
+            'projectLinks',
+        ]);
     }
 
     private function deliveryStatusFrom(int $status): ProjectDeliveryStatus

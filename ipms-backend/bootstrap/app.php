@@ -1,12 +1,18 @@
 <?php
 
+use App\Exceptions\DomainConflictException;
+use App\Http\Middleware\AuditLogger;
+use App\Http\Middleware\CheckPermission;
 use App\Support\ApiResponse;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
+use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful;
+use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -18,13 +24,13 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware) {
         // Register API middleware groups
         $middleware->api(prepend: [
-            \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
+            EnsureFrontendRequestsAreStateful::class,
         ]);
 
         // Register route aliases for middleware
         $middleware->alias([
-            'permission' => \App\Http\Middleware\CheckPermission::class,
-            'audit.log'  => \App\Http\Middleware\AuditLogger::class,
+            'permission' => CheckPermission::class,
+            'audit.log' => AuditLogger::class,
         ]);
 
         // Trust proxies (Nginx reverse proxy)
@@ -53,6 +59,28 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(function (AuthenticationException $exception, Request $request) {
             if ($request->is('api/*')) {
                 return ApiResponse::error('UNAUTHENTICATED', 'Unauthenticated.', 401);
+            }
+        });
+
+        $exceptions->render(function (AuthorizationException $exception, Request $request) {
+            if ($request->is('api/*')) {
+                return ApiResponse::error('FORBIDDEN', $exception->getMessage(), 403);
+            }
+        });
+
+        $exceptions->render(function (AccessDeniedHttpException $exception, Request $request) {
+            if ($request->is('api/*')) {
+                return ApiResponse::error('FORBIDDEN', $exception->getMessage(), 403);
+            }
+        });
+
+        $exceptions->render(function (DomainConflictException $exception, Request $request) {
+            if ($request->is('api/*')) {
+                return ApiResponse::error(
+                    $exception->errorCode,
+                    $exception->getMessage(),
+                    409,
+                );
             }
         });
     })->create();

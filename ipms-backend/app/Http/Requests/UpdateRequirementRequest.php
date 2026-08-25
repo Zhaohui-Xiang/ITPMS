@@ -19,8 +19,8 @@ class UpdateRequirementRequest extends FormRequest
             'priority' => ['sometimes', 'integer', 'in:1,2,3,4'],
             'requirement_type' => ['sometimes', 'integer', 'in:1,2,3,4,5'],
             'expected_completion_date' => ['nullable', 'date'],
-            'project_ids' => ['sometimes', 'array'],
-            'project_ids.*' => ['integer', 'exists:projects,id'],
+            'project_ids' => ['sometimes', 'array', 'min:1'],
+            'project_ids.*' => ['integer', 'distinct', 'exists:projects,id'],
             'dev_lead_id' => ['nullable', 'integer', 'exists:users,id'],
         ];
     }

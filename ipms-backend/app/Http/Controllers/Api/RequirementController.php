@@ -10,7 +10,6 @@ use App\Http\Requests\StoreRequirementRequest;
 use App\Http\Requests\StoreTaskRequest;
 use App\Http\Requests\UpdateRequirementRequest;
 use App\Models\Requirement;
-use App\Models\RequirementVersion;
 use App\Models\Task;
 use App\Scopes\RequirementScope;
 use App\Services\RequirementWorkflowService;
@@ -83,18 +82,6 @@ class RequirementController extends Controller
 
         $requirement = $this->workflow->submit($request->validated(), $user);
 
-        // 操作日志
-        AuditLogger::log($user->id, [
-            'user_name' => $user->username,
-            'user_display_name' => $user->display_name,
-            'user_type' => $user->user_type,
-            'module' => 2,
-            'action_type' => 1,
-            'target_type' => 'requirement',
-            'target_id' => $requirement->id,
-            'target_name' => $requirement->title,
-        ]);
-
         return response()->json([
             'code' => 201,
             'message' => '需求创建成功',
@@ -149,119 +136,20 @@ class RequirementController extends Controller
         $requirement = Requirement::findOrFail($id);
 
         if (! $user->can('update', $requirement)) {
-            return response()->json(['code' => 403, 'message' => '您无权编辑该需求'], 403);
+            return ApiResponse::error('REQUIREMENT_UPDATE_FORBIDDEN', 'You are not allowed to edit this requirement.', 403);
         }
 
-        if ($requirement->isRejectedForResubmission()) {
-            if ($requirement->submitter_id !== $user->id) {
-                return ApiResponse::error(
-                    'REQUIREMENT_RESUBMIT_FORBIDDEN',
-                    'Only the original requester may edit and resubmit.',
-                    403,
-                );
-            }
+        $wasRejected = $requirement->isRejectedForResubmission();
+        $requirement = $this->workflow->update(
+            $requirement,
+            $user,
+            $request->validated(),
+        );
 
-            $requirement = $this->workflow->resubmit(
-                $requirement,
-                $user,
-                $request->validated(),
-            );
-
-            AuditLogger::log($user->id, [
-                'user_name' => $user->username,
-                'user_display_name' => $user->display_name,
-                'user_type' => $user->user_type,
-                'module' => 2,
-                'action_type' => 2,
-                'target_type' => 'requirement',
-                'target_id' => $requirement->id,
-                'target_name' => $requirement->title,
-            ]);
-
-            return ApiResponse::success($requirement, 'Requirement resubmitted.');
-        }
-        // 定义需要追踪变更的核心字段
-        $trackedFields = ['title', 'description', 'priority', 'requirement_type', 'expected_completion_date'];
-        $changes = [];
-        $hasChanges = false;
-
-        foreach ($trackedFields as $field) {
-            if ($request->has($field)) {
-                $oldValue = $requirement->$field;
-                $newValue = $request->input($field);
-
-                if ($oldValue != $newValue) {
-                    $hasChanges = true;
-                    $fieldNames = [
-                        'title' => '需求标题',
-                        'description' => '需求描述',
-                        'priority' => '优先级',
-                        'requirement_type' => '需求类型',
-                        'expected_completion_date' => '期望完成时间',
-                    ];
-
-                    $changes[] = [
-                        'field' => $field,
-                        'field_name' => $fieldNames[$field] ?? $field,
-                        'old_value' => (string) $oldValue,
-                        'new_value' => (string) $newValue,
-                    ];
-                }
-            }
-        }
-
-        // 更新需求字段
-        $data = $request->only($trackedFields);
-        $data['updated_by_id'] = $user->id;
-        $requirement->update($data);
-
-        // 更新项目关联
-        if ($request->has('project_ids')) {
-            $requirement->projects()->sync($request->input('project_ids'));
-        }
-
-        // 更新开发负责人
-        if ($request->has('dev_lead_id')) {
-            $requirement->update(['dev_lead_id' => $request->input('dev_lead_id')]);
-        }
-
-        // 如有核心字段变更，生成版本记录
-        if ($hasChanges) {
-            $newVersion = $requirement->version + 1;
-            $requirement->update(['version' => $newVersion]);
-
-            RequirementVersion::create([
-                'requirement_id' => $requirement->id,
-                'version_number' => $newVersion,
-                'changed_by_id' => $user->id,
-                'changed_at' => now(),
-                'changes' => $changes,
-                'change_summary' => '编辑需求，共变更 '.count($changes).' 个字段',
-            ]);
-        }
-
-        // 操作日志
-        AuditLogger::log($user->id, [
-            'user_name' => $user->username,
-            'user_display_name' => $user->display_name,
-            'user_type' => $user->user_type,
-            'module' => 2,
-            'action_type' => 2,
-            'target_type' => 'requirement',
-            'target_id' => $requirement->id,
-            'target_name' => $requirement->title,
-            'detail' => $hasChanges ? ['changes' => $changes] : null,
-        ]);
-
-        return response()->json([
-            'code' => 200,
-            'message' => '需求更新成功',
-            'data' => $requirement->fresh([
-                'submitter:id,display_name',
-                'reviewer:id,display_name',
-                'projects:id,name',
-            ]),
-        ]);
+        return ApiResponse::success(
+            $requirement,
+            $wasRejected ? 'Requirement resubmitted.' : 'Requirement updated.',
+        );
     }
 
     /**
@@ -289,18 +177,6 @@ class RequirementController extends Controller
             $action,
             $comment,
         );
-
-        AuditLogger::log($user->id, [
-            'user_name' => $user->username,
-            'user_display_name' => $user->display_name,
-            'user_type' => $user->user_type,
-            'module' => 2,
-            'action_type' => 5,
-            'target_type' => 'requirement',
-            'target_id' => $requirement->id,
-            'target_name' => $requirement->title,
-            'detail' => ['action' => $action, 'comment' => $comment],
-        ]);
 
         $message = $action === 'approve'
             ? 'Requirement approved.'
@@ -339,21 +215,6 @@ class RequirementController extends Controller
             $user,
         );
 
-        AuditLogger::log($user->id, [
-            'user_name' => $user->username,
-            'user_display_name' => $user->display_name,
-            'user_type' => $user->user_type,
-            'module' => 2,
-            'action_type' => 4,
-            'target_type' => 'requirement',
-            'target_id' => $requirement->id,
-            'target_name' => $requirement->title,
-            'detail' => [
-                'project_id' => (int) $validated['project_id'],
-                'to_delivery_status' => $targetStatus->value,
-            ],
-        ]);
-
         return ApiResponse::success(
             $requirement->fresh(['projectLinks']),
             'Project delivery status updated.',
@@ -379,18 +240,6 @@ class RequirementController extends Controller
             $user,
             $request->validated(),
         );
-
-        AuditLogger::log($user->id, [
-            'user_name' => $user->username,
-            'user_display_name' => $user->display_name,
-            'user_type' => $user->user_type,
-            'module' => 2,
-            'action_type' => 2,
-            'target_type' => 'requirement',
-            'target_id' => $requirement->id,
-            'target_name' => $requirement->title,
-            'detail' => ['version' => $requirement->version],
-        ]);
 
         return ApiResponse::success($requirement, 'Requirement resubmitted.');
     }

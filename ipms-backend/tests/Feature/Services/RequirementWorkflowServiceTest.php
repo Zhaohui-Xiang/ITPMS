@@ -205,6 +205,7 @@ class RequirementWorkflowServiceTest extends TestCase
     {
         $requester = User::factory()->systemUser()->create();
         $reviewer = User::factory()->internal()->create();
+        $devLead = User::factory()->internal()->create();
         $oldProject = Project::factory()->create();
         $newProject = Project::factory()->create();
         $requirement = Requirement::factory()->create([
@@ -222,6 +223,7 @@ class RequirementWorkflowServiceTest extends TestCase
         $result = $this->service()->resubmit($requirement, $requester, [
             'title' => 'Revision four',
             'priority' => 1,
+            'dev_lead_id' => $devLead->id,
             'project_ids' => [$newProject->id],
         ]);
 
@@ -229,6 +231,7 @@ class RequirementWorkflowServiceTest extends TestCase
         $this->assertNull($result->reviewer_id);
         $this->assertNull($result->review_comment);
         $this->assertNull($result->reviewed_at);
+        $this->assertSame($devLead->id, $result->dev_lead_id);
         $this->assertSame(RequirementStatus::PENDING_REVIEW->value, $result->status);
         $this->assertSame([$newProject->id], $result->projectLinks()->pluck('project_id')->all());
         $this->assertSame(1, RequirementVersion::query()
@@ -242,7 +245,7 @@ class RequirementWorkflowServiceTest extends TestCase
         $this->assertSame($requester->id, $snapshot->changed_by_id);
         $this->assertSame('Requirement resubmitted', $snapshot->change_summary);
         $this->assertSame(
-            ['title', 'priority', 'project_ids'],
+            ['title', 'priority', 'dev_lead_id', 'project_ids'],
             collect($snapshot->changes)->pluck('field')->all(),
         );
     }
@@ -325,9 +328,15 @@ class RequirementWorkflowServiceTest extends TestCase
 
     public function test_project_delivery_only_moves_one_step_and_records_version_history(): void
     {
-        $actor = User::factory()->internal()->create();
+        $actor = $this->userWithPermission('it_pm', 'requirement.transition');
         $version = ProjectVersion::factory()->create([
             'status' => ProjectVersionStatus::IN_DEVELOPMENT,
+        ]);
+        DB::table('project_members')->insert([
+            'project_id' => $version->project_id,
+            'user_id' => $actor->id,
+            'role_in_project' => 'pm',
+            'assigned_at' => now(),
         ]);
         $requirement = Requirement::factory()->create([
             'status' => RequirementStatus::ASSIGNED->value,
@@ -364,9 +373,15 @@ class RequirementWorkflowServiceTest extends TestCase
 
     public function test_project_delivery_rejects_skipped_or_backward_transitions(): void
     {
-        $actor = User::factory()->internal()->create();
+        $actor = $this->userWithPermission('it_pm', 'requirement.transition');
         $link = RequirementProject::factory()->create([
             'delivery_status' => ProjectDeliveryStatus::IN_DEVELOPMENT,
+        ]);
+        DB::table('project_members')->insert([
+            'project_id' => $link->project_id,
+            'user_id' => $actor->id,
+            'role_in_project' => 'pm',
+            'assigned_at' => now(),
         ]);
 
         foreach ([ProjectDeliveryStatus::PENDING_DEPLOY, ProjectDeliveryStatus::ASSIGNED] as $target) {
@@ -448,6 +463,612 @@ class RequirementWorkflowServiceTest extends TestCase
             ->assertJsonPath('data.reviewer_id', null);
     }
 
+    public function test_internal_user_cannot_transition_an_unrelated_target_project(): void
+    {
+        $actor = $this->userWithPermission('it_pm', 'requirement.transition');
+        $visibleProject = Project::factory()->create();
+        $forbiddenProject = Project::factory()->create();
+        $targetVersion = ProjectVersion::factory()->for($forbiddenProject)->create();
+        DB::table('project_members')->insert([
+            'project_id' => $visibleProject->id,
+            'user_id' => $actor->id,
+            'role_in_project' => 'pm',
+            'assigned_at' => now(),
+        ]);
+        $requirement = Requirement::factory()->create([
+            'status' => RequirementStatus::ASSIGNED->value,
+        ]);
+        RequirementProject::factory()->for($requirement)->for($visibleProject)->create();
+        $forbiddenLink = RequirementProject::factory()
+            ->for($requirement)
+            ->forVersion($targetVersion)
+            ->create();
+
+        $this->actingAs($actor)
+            ->postJson("/api/requirements/{$requirement->id}/status", [
+                'project_id' => $forbiddenProject->id,
+                'status' => ProjectDeliveryStatus::IN_DEVELOPMENT->value,
+            ])->assertForbidden()
+            ->assertJsonPath('code', 403);
+
+        $this->assertSame(
+            ProjectDeliveryStatus::ASSIGNED,
+            $forbiddenLink->refresh()->delivery_status,
+        );
+        $this->assertSame(
+            RequirementStatus::ASSIGNED->value,
+            $requirement->refresh()->status,
+        );
+        $this->assertDatabaseCount('project_version_histories', 0);
+        $this->assertDatabaseCount('audit_logs', 0);
+    }
+
+    public function test_pending_requirement_update_adds_project_and_records_one_complete_revision(): void
+    {
+        $requester = $this->userWithPermission('requester', 'requirement.edit');
+        $devLead = User::factory()->internal()->create();
+        $firstProject = Project::factory()->create();
+        $secondProject = Project::factory()->create();
+        $requirement = Requirement::factory()->create([
+            'submitter_id' => $requester->id,
+            'created_by_id' => $requester->id,
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+            'version' => 1,
+            'title' => 'Original title',
+        ]);
+        RequirementProject::factory()->for($requirement)->for($firstProject)->create();
+
+        $this->actingAs($requester)
+            ->putJson("/api/requirements/{$requirement->id}", [
+                'title' => 'Revised title',
+                'dev_lead_id' => $devLead->id,
+                'project_ids' => [$firstProject->id, $secondProject->id],
+            ])->assertOk()
+            ->assertJsonPath('code', 200)
+            ->assertJsonPath('data.version', 2)
+            ->assertJsonPath('data.dev_lead_id', $devLead->id);
+
+        $requirement->refresh();
+        $this->assertSame(2, $requirement->version);
+        $this->assertSame(
+            [$firstProject->id, $secondProject->id],
+            $requirement->projectLinks()->orderBy('project_id')->pluck('project_id')->all(),
+        );
+        $this->assertDatabaseCount('requirement_versions', 1);
+        $snapshot = RequirementVersion::query()->sole();
+        $this->assertSame(
+            ['dev_lead_id', 'project_ids', 'title'],
+            collect($snapshot->changes)->pluck('field')->sort()->values()->all(),
+        );
+        $this->assertDatabaseCount('audit_logs', 1);
+    }
+
+    public function test_update_rejects_an_empty_project_collection(): void
+    {
+        $requester = $this->userWithPermission('requester', 'requirement.edit');
+        $project = Project::factory()->create();
+        $requirement = Requirement::factory()->create([
+            'submitter_id' => $requester->id,
+            'created_by_id' => $requester->id,
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+        ]);
+        RequirementProject::factory()->for($requirement)->for($project)->create();
+
+        $this->actingAs($requester)
+            ->putJson("/api/requirements/{$requirement->id}", [
+                'project_ids' => [],
+            ])->assertUnprocessable()
+            ->assertJsonPath('code', 422);
+
+        $this->actingAs($requester)
+            ->putJson("/api/requirements/{$requirement->id}", [
+                'project_ids' => [$project->id, $project->id],
+            ])->assertUnprocessable()
+            ->assertJsonPath('code', 422);
+
+        $this->assertSame([$project->id], $requirement->projectLinks()->pluck('project_id')->all());
+        $this->assertDatabaseCount('requirement_versions', 0);
+        $this->assertDatabaseCount('audit_logs', 0);
+    }
+
+    public function test_approved_requirement_cannot_change_project_collection(): void
+    {
+        $requester = $this->userWithPermission('requester', 'requirement.edit');
+        $firstProject = Project::factory()->create();
+        $secondProject = Project::factory()->create();
+        $requirement = Requirement::factory()->create([
+            'submitter_id' => $requester->id,
+            'created_by_id' => $requester->id,
+            'status' => RequirementStatus::ASSIGNED->value,
+            'version' => 3,
+        ]);
+        RequirementProject::factory()->for($requirement)->for($firstProject)->create([
+            'delivery_status' => ProjectDeliveryStatus::ASSIGNED,
+        ]);
+
+        $this->actingAs($requester)
+            ->putJson("/api/requirements/{$requirement->id}", [
+                'project_ids' => [$secondProject->id],
+            ])->assertConflict()
+            ->assertJsonPath('code', 409)
+            ->assertJsonPath('error_code', 'REQUIREMENT_PROJECT_SCOPE_LOCKED');
+
+        $this->assertSame(3, $requirement->refresh()->version);
+        $this->assertSame(RequirementStatus::ASSIGNED->value, $requirement->status);
+        $this->assertSame([$firstProject->id], $requirement->projectLinks()->pluck('project_id')->all());
+        $this->assertSame(
+            ProjectDeliveryStatus::ASSIGNED,
+            $requirement->projectLinks()->sole()->delivery_status,
+        );
+        $this->assertDatabaseCount('requirement_versions', 0);
+        $this->assertDatabaseCount('audit_logs', 0);
+    }
+
+    public function test_non_requester_cannot_resubmit_over_http(): void
+    {
+        $requester = User::factory()->systemUser()->create();
+        $actor = $this->userWithPermission('it_pm', 'requirement.edit');
+        $reviewer = User::factory()->internal()->create();
+        $project = Project::factory()->create();
+        DB::table('project_members')->insert([
+            'project_id' => $project->id,
+            'user_id' => $actor->id,
+            'role_in_project' => 'pm',
+            'assigned_at' => now(),
+        ]);
+        $requirement = Requirement::factory()->create([
+            'submitter_id' => $requester->id,
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+            'reviewer_id' => $reviewer->id,
+            'review_comment' => 'Rejected',
+            'reviewed_at' => now(),
+            'version' => 2,
+        ]);
+        RequirementProject::factory()->for($requirement)->for($project)->create();
+
+        $this->actingAs($actor)
+            ->postJson("/api/requirements/{$requirement->id}/resubmit", [
+                'title' => 'Unauthorized revision',
+            ])->assertForbidden()
+            ->assertJsonPath('code', 403);
+
+        $this->assertSame(2, $requirement->refresh()->version);
+        $this->assertSame('Rejected', $requirement->review_comment);
+        $this->assertDatabaseCount('requirement_versions', 0);
+        $this->assertDatabaseCount('audit_logs', 0);
+    }
+
+    public function test_duplicate_review_is_rejected_over_http_without_audit(): void
+    {
+        $reviewer = $this->userWithPermission('it_pm', 'requirement.approve');
+        $project = Project::factory()->create();
+        DB::table('project_members')->insert([
+            'project_id' => $project->id,
+            'user_id' => $reviewer->id,
+            'role_in_project' => 'pm',
+            'assigned_at' => now(),
+        ]);
+        $requirement = Requirement::factory()->create([
+            'status' => RequirementStatus::ASSIGNED->value,
+            'reviewer_id' => $reviewer->id,
+            'review_comment' => 'Approved',
+            'reviewed_at' => now(),
+        ]);
+        RequirementProject::factory()->for($requirement)->for($project)->create();
+
+        $this->actingAs($reviewer)
+            ->postJson("/api/requirements/{$requirement->id}/review", [
+                'action' => 'approve',
+            ])->assertUnprocessable()
+            ->assertJsonPath('code', 422);
+
+        $this->assertSame(RequirementStatus::ASSIGNED->value, $requirement->refresh()->status);
+        $this->assertDatabaseCount('audit_logs', 0);
+    }
+
+    public function test_no_change_update_does_not_increment_version_or_create_snapshot(): void
+    {
+        $requester = $this->userWithPermission('requester', 'requirement.edit');
+        $project = Project::factory()->create();
+        $requirement = Requirement::factory()->create([
+            'submitter_id' => $requester->id,
+            'created_by_id' => $requester->id,
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+            'title' => 'Unchanged',
+            'version' => 4,
+            'expected_completion_date' => '2026-12-10',
+        ]);
+        RequirementProject::factory()->for($requirement)->for($project)->create();
+
+        $this->actingAs($requester)
+            ->putJson("/api/requirements/{$requirement->id}", [
+                'title' => 'Unchanged',
+                'expected_completion_date' => '2026-12-10',
+            ])->assertOk()
+            ->assertJsonPath('data.version', 4);
+
+        $this->assertSame(4, $requirement->refresh()->version);
+        $this->assertDatabaseCount('requirement_versions', 0);
+        $this->assertDatabaseCount('audit_logs', 1);
+    }
+
+    public function test_unique_revision_conflict_returns_stable_409_and_rolls_back_update(): void
+    {
+        $requester = $this->userWithPermission('requester', 'requirement.edit');
+        $project = Project::factory()->create();
+        $requirement = Requirement::factory()->create([
+            'submitter_id' => $requester->id,
+            'created_by_id' => $requester->id,
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+            'title' => 'Before conflict',
+            'version' => 1,
+        ]);
+        RequirementProject::factory()->for($requirement)->for($project)->create();
+        RequirementVersion::query()->create([
+            'requirement_id' => $requirement->id,
+            'version_number' => 2,
+            'changed_by_id' => $requester->id,
+            'changed_at' => now(),
+            'changes' => [],
+            'change_summary' => 'Concurrent revision',
+        ]);
+
+        $this->actingAs($requester)
+            ->putJson("/api/requirements/{$requirement->id}", [
+                'title' => 'After conflict',
+            ])->assertConflict()
+            ->assertJsonPath('code', 409)
+            ->assertJsonPath('error_code', 'REQUIREMENT_VERSION_CONFLICT');
+
+        $requirement->refresh();
+        $this->assertSame('Before conflict', $requirement->title);
+        $this->assertSame(1, $requirement->version);
+        $this->assertDatabaseCount('requirement_versions', 1);
+        $this->assertDatabaseCount('audit_logs', 0);
+    }
+
+    public function test_approved_requirement_without_project_links_cannot_be_aggregated(): void
+    {
+        $requirement = Requirement::factory()->create([
+            'status' => RequirementStatus::ASSIGNED->value,
+        ]);
+
+        try {
+            $this->service()->recalculateAggregateStatus($requirement);
+            $this->fail('Approved requirements without project links must be rejected.');
+        } catch (ValidationException $exception) {
+            $this->assertArrayHasKey('project_ids', $exception->errors());
+        }
+
+        $this->assertSame(
+            RequirementStatus::ASSIGNED->value,
+            $requirement->refresh()->status,
+        );
+    }
+
+    public function test_submit_rolls_back_when_audit_insert_fails(): void
+    {
+        $requester = $this->userWithPermission('requester', 'requirement.create');
+        $project = Project::factory()->create();
+        $this->failAuditWrites();
+
+        $this->actingAs($requester)
+            ->postJson('/api/requirements', [
+                'title' => 'Rollback submission',
+                'description' => 'Must not persist',
+                'priority' => 2,
+                'requirement_type' => 1,
+                'project_ids' => [$project->id],
+            ])->assertInternalServerError();
+
+        $this->assertDatabaseCount('requirements', 0);
+        $this->assertDatabaseCount('requirement_project', 0);
+        $this->assertDatabaseCount('audit_logs', 0);
+    }
+
+    public function test_review_rolls_back_when_audit_insert_fails(): void
+    {
+        $reviewer = $this->userWithPermission('it_pm', 'requirement.approve');
+        $project = Project::factory()->create();
+        DB::table('project_members')->insert([
+            'project_id' => $project->id,
+            'user_id' => $reviewer->id,
+            'role_in_project' => 'pm',
+            'assigned_at' => now(),
+        ]);
+        $requirement = Requirement::factory()->create([
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+            'reviewer_id' => null,
+            'reviewed_at' => null,
+        ]);
+        $link = RequirementProject::factory()->for($requirement)->for($project)->create([
+            'delivery_status' => ProjectDeliveryStatus::IN_DEVELOPMENT,
+        ]);
+        $this->failAuditWrites();
+
+        $this->actingAs($reviewer)
+            ->postJson("/api/requirements/{$requirement->id}/review", [
+                'action' => 'approve',
+            ])->assertInternalServerError();
+
+        $requirement->refresh();
+        $this->assertSame(RequirementStatus::PENDING_REVIEW->value, $requirement->status);
+        $this->assertNull($requirement->reviewer_id);
+        $this->assertNull($requirement->reviewed_at);
+        $this->assertSame(
+            ProjectDeliveryStatus::IN_DEVELOPMENT,
+            $link->refresh()->delivery_status,
+        );
+        $this->assertDatabaseCount('audit_logs', 0);
+    }
+
+    public function test_resubmit_rolls_back_when_audit_insert_fails(): void
+    {
+        $requester = $this->userWithPermission('requester', 'requirement.edit');
+        $reviewer = User::factory()->internal()->create();
+        $devLead = User::factory()->internal()->create();
+        $project = Project::factory()->create();
+        $requirement = Requirement::factory()->create([
+            'submitter_id' => $requester->id,
+            'created_by_id' => $requester->id,
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+            'reviewer_id' => $reviewer->id,
+            'review_comment' => 'Rejected',
+            'reviewed_at' => now(),
+            'title' => 'Rejected title',
+            'version' => 2,
+        ]);
+        RequirementProject::factory()->for($requirement)->for($project)->create();
+        $this->failAuditWrites();
+
+        $this->actingAs($requester)
+            ->postJson("/api/requirements/{$requirement->id}/resubmit", [
+                'title' => 'Should roll back',
+                'dev_lead_id' => $devLead->id,
+            ])->assertInternalServerError();
+
+        $requirement->refresh();
+        $this->assertSame('Rejected title', $requirement->title);
+        $this->assertSame(2, $requirement->version);
+        $this->assertSame($reviewer->id, $requirement->reviewer_id);
+        $this->assertSame('Rejected', $requirement->review_comment);
+        $this->assertNull($requirement->dev_lead_id);
+        $this->assertDatabaseCount('requirement_versions', 0);
+        $this->assertDatabaseCount('audit_logs', 0);
+    }
+
+    public function test_update_rolls_back_when_audit_insert_fails(): void
+    {
+        $requester = $this->userWithPermission('requester', 'requirement.edit');
+        $project = Project::factory()->create();
+        $requirement = Requirement::factory()->create([
+            'submitter_id' => $requester->id,
+            'created_by_id' => $requester->id,
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+            'title' => 'Before audit failure',
+            'version' => 5,
+        ]);
+        RequirementProject::factory()->for($requirement)->for($project)->create();
+        $this->failAuditWrites();
+
+        $this->actingAs($requester)
+            ->putJson("/api/requirements/{$requirement->id}", [
+                'title' => 'After audit failure',
+            ])->assertInternalServerError();
+
+        $requirement->refresh();
+        $this->assertSame('Before audit failure', $requirement->title);
+        $this->assertSame(5, $requirement->version);
+        $this->assertDatabaseCount('requirement_versions', 0);
+        $this->assertDatabaseCount('audit_logs', 0);
+    }
+
+    public function test_transition_rolls_back_pivot_aggregate_and_history_when_audit_insert_fails(): void
+    {
+        $actor = $this->userWithPermission('it_pm', 'requirement.transition');
+        $version = ProjectVersion::factory()->create();
+        DB::table('project_members')->insert([
+            'project_id' => $version->project_id,
+            'user_id' => $actor->id,
+            'role_in_project' => 'pm',
+            'assigned_at' => now(),
+        ]);
+        $requirement = Requirement::factory()->create([
+            'status' => RequirementStatus::ASSIGNED->value,
+        ]);
+        $link = RequirementProject::factory()
+            ->for($requirement)
+            ->forVersion($version)
+            ->create(['delivery_status' => ProjectDeliveryStatus::ASSIGNED]);
+        $this->failAuditWrites();
+
+        $this->actingAs($actor)
+            ->postJson("/api/requirements/{$requirement->id}/status", [
+                'project_id' => $version->project_id,
+                'status' => ProjectDeliveryStatus::IN_DEVELOPMENT->value,
+            ])->assertInternalServerError();
+
+        $this->assertSame(
+            ProjectDeliveryStatus::ASSIGNED,
+            $link->refresh()->delivery_status,
+        );
+        $this->assertSame(
+            RequirementStatus::ASSIGNED->value,
+            $requirement->refresh()->status,
+        );
+        $this->assertDatabaseCount('project_version_histories', 0);
+        $this->assertDatabaseCount('requirement_versions', 0);
+        $this->assertDatabaseCount('audit_logs', 0);
+    }
+
+    public function test_requirement_row_lock_serializes_revisions_across_pgsql_connections(): void
+    {
+        $connectionName = 'pgsql_requirement_lock_test';
+        config([
+            "database.connections.{$connectionName}" => config('database.connections.pgsql'),
+        ]);
+        DB::purge($connectionName);
+        $secondary = DB::connection($connectionName);
+
+        $userId = $secondary->table('users')->insertGetId([
+            'username' => 'lock-test-user',
+            'password' => 'not-used',
+            'first_name' => 'Lock',
+            'last_name' => 'Test',
+            'email' => 'lock-test@example.test',
+            'is_active' => true,
+            'is_staff' => false,
+            'date_joined' => now(),
+            'user_type' => 1,
+            'must_change_password' => false,
+            'is_disabled' => false,
+            'display_name' => 'Lock Test',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $requirementId = $secondary->table('requirements')->insertGetId([
+            'title' => 'Locked revision',
+            'description' => 'Lock serialization proof',
+            'priority' => 1,
+            'requirement_type' => 1,
+            'submitter_id' => $userId,
+            'submitted_at' => now(),
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+            'version' => 1,
+            'created_at' => now(),
+            'updated_at' => now(),
+            'created_by_id' => $userId,
+        ]);
+
+        try {
+            $locked = DB::table('requirements')
+                ->where('id', $requirementId)
+                ->lockForUpdate()
+                ->first();
+            $this->assertNotNull($locked);
+
+            $secondary->beginTransaction();
+            $secondary->statement("SET LOCAL lock_timeout = '150ms'");
+
+            try {
+                $secondary->table('requirements')
+                    ->where('id', $requirementId)
+                    ->lockForUpdate()
+                    ->first();
+                $this->fail('The second connection must wait for the requirement row lock.');
+            } catch (QueryException $exception) {
+                $this->assertSame('55P03', $exception->getCode());
+                $this->assertStringContainsString(
+                    'lock timeout',
+                    strtolower($exception->getMessage()),
+                );
+            }
+        } finally {
+            if ($secondary->transactionLevel() > 0) {
+                $secondary->rollBack();
+            }
+
+            DB::connection()->rollBack();
+            $secondary->table('requirements')->where('id', $requirementId)->delete();
+            $secondary->table('users')->where('id', $userId)->delete();
+            DB::connection()->beginTransaction();
+            DB::purge($connectionName);
+        }
+    }
+
+    public function test_successful_http_workflow_actions_each_write_exactly_one_audit(): void
+    {
+        $requester = $this->userWithPermission('requester', 'requirement.create');
+        $this->grantRolePermission('requester', 'requirement.edit');
+        $this->grantRolePermission('requester', 'requirement.transition');
+        $project = Project::factory()->create();
+
+        $created = $this->actingAs($requester)
+            ->postJson('/api/requirements', [
+                'title' => 'Audit lifecycle',
+                'description' => 'Exactly one audit per operation',
+                'priority' => 2,
+                'requirement_type' => 1,
+                'project_ids' => [$project->id],
+            ])->assertCreated()
+            ->json('data');
+        $requirement = Requirement::query()->findOrFail($created['id']);
+
+        $this->actingAs($requester)
+            ->putJson("/api/requirements/{$requirement->id}", [
+                'title' => 'Audit lifecycle revised',
+            ])->assertOk();
+
+        $reviewer = $this->userWithPermission('it_pm', 'requirement.approve');
+        DB::table('project_members')->insert([
+            'project_id' => $project->id,
+            'user_id' => $reviewer->id,
+            'role_in_project' => 'pm',
+            'assigned_at' => now(),
+        ]);
+        $this->actingAs($reviewer)
+            ->postJson("/api/requirements/{$requirement->id}/review", [
+                'action' => 'approve',
+            ])->assertOk();
+
+        $this->actingAs($requester)
+            ->postJson("/api/requirements/{$requirement->id}/status", [
+                'project_id' => $project->id,
+                'status' => ProjectDeliveryStatus::IN_DEVELOPMENT->value,
+            ])->assertOk();
+
+        $rejected = Requirement::factory()->create([
+            'submitter_id' => $requester->id,
+            'created_by_id' => $requester->id,
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+            'reviewer_id' => $reviewer->id,
+            'review_comment' => 'Rejected',
+            'reviewed_at' => now(),
+        ]);
+        RequirementProject::factory()->for($rejected)->for($project)->create();
+        $this->actingAs($requester)
+            ->postJson("/api/requirements/{$rejected->id}/resubmit", [
+                'title' => 'Audit resubmission',
+            ])->assertOk();
+
+        $this->assertSame(
+            1,
+            DB::table('audit_logs')
+                ->where('target_id', (string) $requirement->id)
+                ->where('action_type', 1)
+                ->count(),
+        );
+        $this->assertSame(
+            1,
+            DB::table('audit_logs')
+                ->where('target_id', (string) $requirement->id)
+                ->where('action_type', 2)
+                ->count(),
+        );
+        $this->assertSame(
+            1,
+            DB::table('audit_logs')
+                ->where('target_id', (string) $requirement->id)
+                ->where('action_type', 5)
+                ->count(),
+        );
+        $this->assertSame(
+            1,
+            DB::table('audit_logs')
+                ->where('target_id', (string) $requirement->id)
+                ->where('action_type', 4)
+                ->count(),
+        );
+        $this->assertSame(
+            1,
+            DB::table('audit_logs')
+                ->where('target_id', (string) $rejected->id)
+                ->where('action_type', 2)
+                ->count(),
+        );
+        $this->assertDatabaseCount('audit_logs', 5);
+    }
+
     private function service(): RequirementWorkflowService
     {
         return app(RequirementWorkflowService::class);
@@ -470,6 +1091,36 @@ class RequirementWorkflowServiceTest extends TestCase
             BEFORE INSERT OR UPDATE ON requirement_project
             FOR EACH ROW EXECUTE FUNCTION fail_selected_requirement_project_write();
             SQL);
+    }
+
+    private function failAuditWrites(): void
+    {
+        DB::unprepared(<<<'SQL'
+            CREATE OR REPLACE FUNCTION fail_audit_write()
+            RETURNS trigger AS $$
+            BEGIN
+                RAISE EXCEPTION 'injected audit failure';
+            END;
+            $$ LANGUAGE plpgsql;
+
+            CREATE TRIGGER fail_audit_write
+            BEFORE INSERT ON audit_logs
+            FOR EACH ROW EXECUTE FUNCTION fail_audit_write();
+            SQL);
+    }
+
+    private function grantRolePermission(string $roleCode, string $permissionCode): void
+    {
+        $role = Role::query()->where('code', $roleCode)->firstOrFail();
+        $permission = Permission::query()->firstOrCreate(
+            ['code' => $permissionCode],
+            [
+                'name' => $permissionCode,
+                'module' => 'requirement',
+                'action' => 'test',
+            ],
+        );
+        $role->permissions()->syncWithoutDetaching($permission);
     }
 
     private function userWithPermission(string $roleCode, string $permissionCode): User
