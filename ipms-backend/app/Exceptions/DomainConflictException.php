@@ -4,7 +4,7 @@ namespace App\Exceptions;
 
 use RuntimeException;
 
-class DomainConflictException extends RuntimeException
+final class DomainConflictException extends RuntimeException
 {
     public function __construct(
         public readonly string $errorCode,

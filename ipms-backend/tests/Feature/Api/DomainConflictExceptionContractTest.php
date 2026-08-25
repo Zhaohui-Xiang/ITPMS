@@ -4,6 +4,7 @@ namespace Tests\Feature\Api;
 
 use App\Exceptions\DomainConflictException;
 use Illuminate\Support\Facades\Route;
+use ReflectionClass;
 use Tests\TestCase;
 
 class DomainConflictExceptionContractTest extends TestCase
@@ -16,6 +17,7 @@ class DomainConflictExceptionContractTest extends TestCase
         $this->assertSame(409, $exception->status);
         $this->assertSame([], $exception->errors);
         $this->assertSame('STALE_VERSION', $exception->getMessage());
+        $this->assertTrue((new ReflectionClass(DomainConflictException::class))->isFinal());
     }
 
     public function test_renderer_uses_exception_status_errors_and_default_message(): void

@@ -10,6 +10,7 @@ use App\Models\ProjectVersionHistory;
 use App\Models\RequirementProject;
 use App\Models\User;
 use App\Services\ProjectVersionService;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\Process\Process;
@@ -29,6 +30,7 @@ class ProjectVersionServiceTest extends TestCase
             'code' => 'REL-2026-01',
             'name' => 'August release',
             'description' => 'Initial scope',
+            'release_notes' => 'Release notes',
             'owner_id' => $owner->id,
             'planned_start_date' => '2026-08-20',
             'planned_release_date' => '2026-09-15',
@@ -40,6 +42,13 @@ class ProjectVersionServiceTest extends TestCase
         $this->assertSame($firstProject->id, $first->project_id);
         $this->assertSame($actor->id, $first->created_by_id);
         $this->assertSame($owner->id, $first->owner_id);
+        $this->assertSame('August release', $first->name);
+        $this->assertSame('Initial scope', $first->description);
+        $this->assertSame('Release notes', $first->release_notes);
+        $this->assertSame('2026-08-20', $first->planned_start_date->toDateString());
+        $this->assertSame('2026-09-15', $first->planned_release_date->toDateString());
+        $this->assertTrue($first->owner->is($owner));
+        $this->assertTrue($first->creator->is($actor));
         $this->assertSame(ProjectVersionStatus::DRAFT, $first->status);
         $this->assertSame(1, $first->lock_version);
         $this->assertSame('REL-2026-01', $second->code);
@@ -260,13 +269,112 @@ class ProjectVersionServiceTest extends TestCase
 
         $this->assertSame($new->id, $link->fresh()->project_version_id);
         $this->assertSame(5, $updated->lock_version);
-        $this->assertSame(8, $old->fresh()->lock_version);
+        $this->assertSame(9, $old->fresh()->lock_version);
         $history = ProjectVersionHistory::sole();
         $this->assertSame($new->id, $history->project_version_id);
         $this->assertSame('requirement_moved', $history->event_type);
         $this->assertSame('Move', $history->reason);
         $this->assertSame($old->id, $history->metadata['old_version_id']);
         $this->assertSame($new->id, $history->metadata['new_version_id']);
+    }
+
+    public function test_reassigning_to_the_same_version_is_idempotent(): void
+    {
+        $originalActor = User::factory()->internal()->create();
+        $newActor = User::factory()->internal()->create();
+        $version = ProjectVersion::factory()->create(['lock_version' => 4]);
+        $assignedAt = now()->subDay()->startOfSecond();
+        $link = RequirementProject::factory()->forVersion($version)->create([
+            'version_assigned_by_id' => $originalActor->id,
+            'version_assigned_at' => $assignedAt,
+        ]);
+
+        $result = $this->service()->assignRequirement($version, $link, 4, $newActor);
+
+        $this->assertSame(4, $result->lock_version);
+        $this->assertSame($version->id, $link->fresh()->project_version_id);
+        $this->assertSame($originalActor->id, $link->fresh()->version_assigned_by_id);
+        $this->assertTrue($assignedAt->equalTo($link->fresh()->version_assigned_at));
+        $this->assertDatabaseCount('project_version_histories', 0);
+    }
+
+    public function test_move_validation_failure_preserves_both_locks_and_pivot(): void
+    {
+        $actor = User::factory()->internal()->create();
+        $project = Project::factory()->create();
+        $old = ProjectVersion::factory()->for($project)->inTesting()->create(['lock_version' => 2]);
+        $target = ProjectVersion::factory()->for($project)->create(['lock_version' => 7]);
+        $link = RequirementProject::factory()->forVersion($old)->create();
+
+        $this->conflict(
+            fn () => $this->service()->assignRequirement($target, $link, 7, $actor),
+            'FORCE_REASON_REQUIRED',
+            422,
+            ['reason' => ['A reason is required.']],
+        );
+
+        $this->assertSame(2, $old->fresh()->lock_version);
+        $this->assertSame(7, $target->fresh()->lock_version);
+        $this->assertSame($old->id, $link->fresh()->project_version_id);
+        $this->assertDatabaseCount('project_version_histories', 0);
+    }
+
+    public function test_move_pivot_failure_rolls_back_both_locks_and_history(): void
+    {
+        $actor = User::factory()->internal()->make();
+        $actor->setAttribute('id', (int) User::max('id') + 10_000);
+        $project = Project::factory()->create();
+        $old = ProjectVersion::factory()->for($project)->create(['lock_version' => 3]);
+        $target = ProjectVersion::factory()->for($project)->create(['lock_version' => 5]);
+        $link = RequirementProject::factory()->forVersion($old)->create();
+
+        try {
+            $this->service()->assignRequirement($target, $link, 5, $actor, 'Move');
+            $this->fail('Expected the assignment actor foreign key to reject the pivot write.');
+        } catch (QueryException $exception) {
+            $this->assertSame('23503', $exception->getCode());
+        }
+
+        $this->assertSame(3, $old->fresh()->lock_version);
+        $this->assertSame(5, $target->fresh()->lock_version);
+        $this->assertSame($old->id, $link->fresh()->project_version_id);
+        $this->assertDatabaseCount('project_version_histories', 0);
+    }
+
+    public function test_move_history_failure_rolls_back_pivot_and_both_locks(): void
+    {
+        $actor = User::factory()->internal()->create();
+        $project = Project::factory()->create();
+        $old = ProjectVersion::factory()->for($project)->create(['lock_version' => 6]);
+        $target = ProjectVersion::factory()->for($project)->create(['lock_version' => 9]);
+        $link = RequirementProject::factory()->forVersion($old)->create();
+
+        DB::unprepared(<<<'SQL'
+CREATE OR REPLACE FUNCTION ipms_test_reject_version_history()
+RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION 'forced project version history failure';
+END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER ipms_test_reject_version_history
+BEFORE INSERT ON project_version_histories
+FOR EACH ROW EXECUTE FUNCTION ipms_test_reject_version_history();
+SQL);
+
+        try {
+            $this->service()->assignRequirement($target, $link, 9, $actor, 'Move');
+            $this->fail('Expected the history trigger to reject the move.');
+        } catch (QueryException $exception) {
+            $this->assertSame('P0001', $exception->getCode());
+        } finally {
+            DB::unprepared('DROP TRIGGER IF EXISTS ipms_test_reject_version_history ON project_version_histories');
+            DB::unprepared('DROP FUNCTION IF EXISTS ipms_test_reject_version_history()');
+        }
+
+        $this->assertSame(6, $old->fresh()->lock_version);
+        $this->assertSame(9, $target->fresh()->lock_version);
+        $this->assertSame($old->id, $link->fresh()->project_version_id);
+        $this->assertDatabaseCount('project_version_histories', 0);
     }
 
     public function test_scope_changes_enforce_status_locks_and_in_testing_reason(): void
@@ -403,7 +511,7 @@ class ProjectVersionServiceTest extends TestCase
         $this->assertModelExists($planned);
     }
 
-    public function test_postgresql_row_lock_serializes_competing_write_before_stale_check(): void
+    public function test_postgresql_row_lock_reports_database_lock_wait_before_stale_check(): void
     {
         $this->assertSame('pgsql', DB::connection()->getDriverName());
         $actor = User::factory()->internal()->create();
@@ -412,45 +520,206 @@ class ProjectVersionServiceTest extends TestCase
             'require getcwd()."/vendor/autoload.php";',
             '$app = require getcwd()."/bootstrap/app.php";',
             '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();',
-            'echo "started\\n"; flush();',
+            '$pid = (int) Illuminate\\Support\\Facades\\DB::selectOne("select pg_backend_pid() as pid")->pid;',
+            'echo json_encode(["event" => "started", "pid" => $pid])."\\n"; flush();',
             'try {',
             '  app(App\\Services\\ProjectVersionService::class)->update(',
             '    App\\Models\\ProjectVersion::findOrFail(%d),',
             '    ["name" => "Child"], 1, App\\Models\\User::findOrFail(%d)',
             '  );',
-            '  echo json_encode(["result" => "updated"])."\\n";',
+            '  echo json_encode(["event" => "result", "result" => "updated"])."\\n";',
             '} catch (App\\Exceptions\\DomainConflictException $exception) {',
-            '  echo json_encode(["result" => "conflict", "code" => $exception->errorCode, "errors" => $exception->errors])."\\n";',
+            '  echo json_encode(["event" => "result", "result" => "conflict", "code" => $exception->errorCode, "errors" => $exception->errors])."\\n";',
             '}',
         ]), $version->id, $actor->id);
         $process = new Process([PHP_BINARY, '-r', $script], base_path());
-        $process->setTimeout(5);
-
+        $process->setTimeout(8);
+        $observedWaitType = null;
         DB::beginTransaction();
-        DB::table('project_versions')->where('id', $version->id)->lockForUpdate()->first();
-        $process->start();
-        $deadline = microtime(true) + 3;
-        while (! str_contains($process->getOutput(), "started\n") && microtime(true) < $deadline) {
-            usleep(10_000);
+
+        try {
+            DB::table('project_versions')->where('id', $version->id)->lockForUpdate()->first();
+            $process->start();
+            $backendPid = $this->waitForProcessEvent($process, 'started')['pid'];
+            $deadline = microtime(true) + 5;
+            do {
+                $activity = DB::selectOne(
+                    'select wait_event_type, wait_event from pg_stat_activity where pid = ?',
+                    [$backendPid],
+                );
+                $observedWaitType = $activity?->wait_event_type;
+                if ($observedWaitType === 'Lock') {
+                    break;
+                }
+                usleep(10_000);
+            } while (microtime(true) < $deadline);
+            DB::table('project_versions')->where('id', $version->id)->update(['lock_version' => 2]);
+            DB::commit();
+        } finally {
+            if (DB::transactionLevel() > 0) {
+                DB::rollBack();
+            }
         }
-        $this->assertStringContainsString("started\n", $process->getOutput());
-        usleep(200_000);
-        $this->assertTrue($process->isRunning(), 'Competing service call must wait for the row lock.');
 
-        DB::table('project_versions')->where('id', $version->id)->update(['lock_version' => 2]);
-        DB::commit();
         $process->wait();
-        $lines = array_values(array_filter(explode("\n", trim($process->getOutput()))));
-        $payload = json_decode(end($lines), true);
-
+        $payload = $this->waitForProcessEvent($process, 'result');
+        $this->assertSame('Lock', $observedWaitType);
         $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
         $this->assertSame([
+            'event' => 'result',
             'result' => 'conflict',
             'code' => 'STALE_VERSION',
             'errors' => ['lock_version' => ['current' => 2]],
         ], $payload);
         $this->assertSame('Original', $version->fresh()->name);
         $this->assertSame(2, $version->fresh()->lock_version);
+    }
+
+    public function test_opposite_scope_moves_finish_without_deadlock_and_version_both_sides(): void
+    {
+        $this->assertSame('pgsql', DB::connection()->getDriverName());
+        $actor = User::factory()->internal()->create();
+        $project = Project::factory()->create();
+        $first = ProjectVersion::factory()->for($project)->create(['lock_version' => 1]);
+        $second = ProjectVersion::factory()->for($project)->create(['lock_version' => 1]);
+        $firstLink = RequirementProject::factory()->forVersion($first)->create();
+        $secondLink = RequirementProject::factory()->forVersion($second)->create();
+        $barrier = sys_get_temp_dir().'/ipms-scope-move-'.bin2hex(random_bytes(8));
+        $firstProcess = new Process([PHP_BINARY, '-r', $this->scopeMoveScript(
+            $second->id, $firstLink->id, $actor->id, $barrier,
+        )], base_path());
+        $secondProcess = new Process([PHP_BINARY, '-r', $this->scopeMoveScript(
+            $first->id, $secondLink->id, $actor->id, $barrier,
+        )], base_path());
+        $firstProcess->setTimeout(12);
+        $secondProcess->setTimeout(12);
+
+        try {
+            $firstProcess->start();
+            $secondProcess->start();
+            $firstStarted = $this->waitForProcessEvent($firstProcess, 'started');
+            $secondStarted = $this->waitForProcessEvent($secondProcess, 'started');
+            $this->assertNotSame($firstStarted['pid'], $secondStarted['pid']);
+            touch($barrier);
+            $firstProcess->wait();
+            $secondProcess->wait();
+        } finally {
+            @unlink($barrier);
+            if ($firstProcess->isRunning()) {
+                $firstProcess->stop();
+            }
+            if ($secondProcess->isRunning()) {
+                $secondProcess->stop();
+            }
+        }
+
+        try {
+            $firstResult = $this->waitForProcessEvent($firstProcess, 'result');
+            $secondResult = $this->waitForProcessEvent($secondProcess, 'result');
+            $this->assertTrue($firstProcess->isSuccessful(), $firstProcess->getErrorOutput());
+            $this->assertTrue($secondProcess->isSuccessful(), $secondProcess->getErrorOutput());
+            $this->assertSame('updated', $firstResult['result']);
+            $this->assertSame('updated', $secondResult['result']);
+            $this->assertNotContains('40P01', array_column([
+                ...$this->processEvents($firstProcess),
+                ...$this->processEvents($secondProcess),
+            ], 'sql_state'));
+            $this->assertSame($second->id, $firstLink->fresh()->project_version_id);
+            $this->assertSame($first->id, $secondLink->fresh()->project_version_id);
+            $this->assertSame(3, $first->fresh()->lock_version);
+            $this->assertSame(3, $second->fresh()->lock_version);
+            $this->assertDatabaseCount('project_version_histories', 2);
+        } finally {
+            DB::table('project_version_histories')
+                ->whereIn('project_version_id', [$first->id, $second->id])
+                ->delete();
+            DB::table('requirement_project')
+                ->whereIn('id', [$firstLink->id, $secondLink->id])
+                ->delete();
+            DB::table('requirements')
+                ->whereIn('id', [$firstLink->requirement_id, $secondLink->requirement_id])
+                ->delete();
+            DB::table('project_versions')
+                ->whereIn('id', [$first->id, $second->id])
+                ->delete();
+        }
+    }
+
+    private function scopeMoveScript(
+        int $targetVersionId,
+        int $linkId,
+        int $actorId,
+        string $barrier,
+    ): string {
+        return sprintf(implode("\n", [
+            'require getcwd()."/vendor/autoload.php";',
+            '$app = require getcwd()."/bootstrap/app.php";',
+            '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();',
+            '$pid = (int) Illuminate\\Support\\Facades\\DB::selectOne("select pg_backend_pid() as pid")->pid;',
+            'echo json_encode(["event" => "started", "pid" => $pid])."\\n"; flush();',
+            'while (! file_exists(%s)) { usleep(1000); }',
+            '$expected = 1; $attempts = 0;',
+            'while (true) {',
+            '  $attempts++;',
+            '  try {',
+            '    $updated = app(App\\Services\\ProjectVersionService::class)->assignRequirement(',
+            '      App\\Models\\ProjectVersion::findOrFail(%d),',
+            '      App\\Models\\RequirementProject::findOrFail(%d),',
+            '      $expected, App\\Models\\User::findOrFail(%d), "Concurrent move"',
+            '    );',
+            '    echo json_encode(["event" => "result", "result" => "updated", "attempts" => $attempts])."\\n";',
+            '    break;',
+            '  } catch (App\\Exceptions\\DomainConflictException $exception) {',
+            '    if ($exception->errorCode === "STALE_VERSION" && $attempts < 3) {',
+            '      $expected = $exception->errors["lock_version"]["current"];',
+            '      continue;',
+            '    }',
+            '    echo json_encode(["event" => "result", "result" => "conflict", "code" => $exception->errorCode])."\\n";',
+            '    break;',
+            '  } catch (Illuminate\\Database\\QueryException $exception) {',
+            '    echo json_encode(["event" => "result", "result" => "error", "sql_state" => $exception->getCode()])."\\n";',
+            '    break;',
+            '  }',
+            '}',
+        ]), var_export($barrier, true), $targetVersionId, $linkId, $actorId);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function waitForProcessEvent(Process $process, string $event): array
+    {
+        $deadline = microtime(true) + 8;
+        do {
+            foreach ($this->processEvents($process) as $payload) {
+                if (($payload['event'] ?? null) === $event) {
+                    return $payload;
+                }
+            }
+            usleep(10_000);
+        } while ($process->isRunning() && microtime(true) < $deadline);
+
+        foreach ($this->processEvents($process) as $payload) {
+            if (($payload['event'] ?? null) === $event) {
+                return $payload;
+            }
+        }
+        $this->fail("Process event [{$event}] was not emitted. Output: {$process->getOutput()}");
+
+        return [];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function processEvents(Process $process): array
+    {
+        return collect(explode("\n", trim($process->getOutput())))
+            ->filter()
+            ->map(fn (string $line): mixed => json_decode($line, true))
+            ->filter(fn (mixed $payload): bool => is_array($payload))
+            ->values()
+            ->all();
     }
 
     private function service(): ProjectVersionService

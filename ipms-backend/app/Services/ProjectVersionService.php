@@ -146,11 +146,7 @@ final class ProjectVersionService
             $actor,
             $reason,
         ): ProjectVersion {
-            $lockedLink = $this->lockRequirementLink($link);
-            $versions = $this->lockVersions([
-                $version->id,
-                $lockedLink->project_version_id,
-            ]);
+            [$lockedLink, $versions] = $this->lockScopeMutationRows($version, $link);
             $target = $versions->get($version->id);
 
             if (! $target instanceof ProjectVersion) {
@@ -188,6 +184,11 @@ final class ProjectVersionService
                 'version_assigned_at' => now(),
             ]);
 
+            if ($oldVersion instanceof ProjectVersion && $oldVersion->id !== $target->id) {
+                $oldVersion->lock_version++;
+                $oldVersion->save();
+            }
+
             $target->lock_version++;
             $target->save();
 
@@ -217,11 +218,7 @@ final class ProjectVersionService
             $actor,
             $reason,
         ): ProjectVersion {
-            $lockedLink = $this->lockRequirementLink($link);
-            $versions = $this->lockVersions([
-                $version->id,
-                $lockedLink->project_version_id,
-            ]);
+            [$lockedLink, $versions] = $this->lockScopeMutationRows($version, $link);
             $target = $versions->get($version->id);
 
             if (! $target instanceof ProjectVersion) {
@@ -333,12 +330,28 @@ final class ProjectVersionService
             ->keyBy('id');
     }
 
-    private function lockRequirementLink(RequirementProject $link): RequirementProject
-    {
-        return RequirementProject::query()
+    /**
+     * Global release-workflow lock order: requirement_project.id ASC,
+     * then project_versions.id ASC. ProjectReleaseService must use the same order.
+     *
+     * @return array{RequirementProject, Collection<int, ProjectVersion>}
+     */
+    private function lockScopeMutationRows(
+        ProjectVersion $version,
+        RequirementProject $link,
+    ): array {
+        $lockedLink = RequirementProject::query()
             ->whereKey($link->getKey())
+            ->orderBy('id')
             ->lockForUpdate()
             ->firstOrFail();
+
+        $versions = $this->lockVersions([
+            $version->id,
+            $lockedLink->project_version_id,
+        ]);
+
+        return [$lockedLink, $versions];
     }
 
     private function assertExpectedLock(ProjectVersion $version, int $expectedLock): void
