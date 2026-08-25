@@ -144,7 +144,10 @@ class ProjectVersionServiceTest extends TestCase
     public function test_transition_forward_and_rollback_write_exactly_one_history_each(): void
     {
         $actor = User::factory()->internal()->create();
-        $forward = ProjectVersion::factory()->create(['lock_version' => 5]);
+        $forward = ProjectVersion::factory()->create([
+            'lock_version' => 5,
+            'planned_release_date' => '2026-09-30',
+        ]);
         $updated = $this->service()->transition(
             $forward,
             ProjectVersionStatus::PLANNED,

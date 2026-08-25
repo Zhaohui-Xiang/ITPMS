@@ -33,6 +33,10 @@ final class ProjectVersionService
         ProjectVersionStatus::ARCHIVED,
     ];
 
+    public function __construct(
+        private readonly ReleaseGateService $releaseGateService,
+    ) {}
+
     public function create(Project $project, array $data, User $actor): ProjectVersion
     {
         try {
@@ -112,6 +116,18 @@ final class ProjectVersionService
             $rollback = $target->value < $locked->status->value;
             if ($rollback) {
                 $this->assertReason($reason);
+            }
+
+            if (! $rollback) {
+                $gate = $this->releaseGateService->check($locked, $target);
+
+                if (! $gate->passed) {
+                    throw new DomainConflictException(
+                        'RELEASE_GATE_FAILED',
+                        409,
+                        $gate->blocking,
+                    );
+                }
             }
 
             $from = $locked->status;
