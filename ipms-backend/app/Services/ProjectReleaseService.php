@@ -16,6 +16,7 @@ use App\Models\RequirementProject;
 use App\Models\Task;
 use App\Models\User;
 use App\Policies\ProjectVersionPolicy;
+use App\ValueObjects\ReleaseCommand;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -36,14 +37,17 @@ final class ProjectReleaseService
     public function __construct(
         private readonly ReleaseGateService $releaseGateService,
         private readonly ProjectVersionPolicy $policy,
+        private readonly VersionGateLock $versionGateLock,
     ) {}
 
     public function release(ProjectVersion $version, User $actor, array $data): ProjectVersion
     {
+        $command = ReleaseCommand::from($data);
+
         for ($attempt = 1; $attempt <= self::MAX_SCOPE_RETRIES; $attempt++) {
             try {
                 return DB::transaction(
-                    fn (): ProjectVersion => $this->releaseLocked($version->id, $actor, $data),
+                    fn (): ProjectVersion => $this->releaseLocked($version->id, $actor, $command),
                 );
             } catch (ReleaseScopeChanged $exception) {
                 if ($attempt === self::MAX_SCOPE_RETRIES) {
@@ -59,8 +63,13 @@ final class ProjectReleaseService
         throw new RuntimeException('Unreachable project release retry state.');
     }
 
-    private function releaseLocked(int $versionId, User $actor, array $data): ProjectVersion
-    {
+    private function releaseLocked(
+        int $versionId,
+        User $actor,
+        ReleaseCommand $command,
+    ): ProjectVersion {
+        $this->versionGateLock->acquire($versionId);
+
         $initialScopeIds = RequirementProject::query()
             ->where('project_version_id', $versionId)
             ->orderBy('id')
@@ -91,34 +100,46 @@ final class ProjectReleaseService
             throw new ReleaseScopeChanged;
         }
 
-        $force = (bool) ($data['force'] ?? false);
-        $reason = trim((string) ($data['force_reason'] ?? ''));
+        $force = $command->force;
+        $reason = $command->forceReason ?? '';
         $from = $locked->status;
+
+        if ($from === ProjectVersionStatus::RELEASED) {
+            $force
+                ? $this->assertForceActor($locked, $actor)
+                : $this->assertNormalActor($locked, $actor);
+
+            $snapshot = $locked->releaseSnapshot()->first();
+            if ($snapshot === null) {
+                throw new DomainConflictException(
+                    'RELEASE_SNAPSHOT_MISSING',
+                    errors: ['project_version_id' => [$locked->id]],
+                    message: 'The released version has no immutable snapshot.',
+                );
+            }
+
+            if ($snapshot->is_override !== $force) {
+                throw new DomainConflictException(
+                    'RELEASE_MODE_MISMATCH',
+                    errors: ['force' => ['expected' => $snapshot->is_override]],
+                    message: 'The release replay mode does not match the original release.',
+                );
+            }
+
+            return $locked->fresh();
+        }
 
         if ($force) {
             $this->assertForceRelease($locked, $actor, $reason);
         } else {
             $this->assertNormalActor($locked, $actor);
-
-            if ($from === ProjectVersionStatus::RELEASED) {
-                if (! $locked->releaseSnapshot()->exists()) {
-                    throw new DomainConflictException(
-                        'RELEASE_SNAPSHOT_MISSING',
-                        errors: ['project_version_id' => [$locked->id]],
-                        message: 'The released version has no immutable snapshot.',
-                    );
-                }
-
-                return $locked->fresh();
-            }
-
             $this->assertNormalStatus($locked);
         }
 
-        $this->assertExpectedLock($locked, (int) ($data['lock_version'] ?? 0));
+        $this->assertExpectedLock($locked, $command->lockVersion);
 
-        $notes = array_key_exists('release_notes', $data)
-            ? trim((string) $data['release_notes'])
+        $notes = $command->hasReleaseNotes
+            ? ($command->releaseNotes ?? '')
             : trim((string) $locked->release_notes);
         $locked->release_notes = $notes === '' ? null : $notes;
         $locked->save();
@@ -157,7 +178,7 @@ final class ProjectReleaseService
         $locked->lock_version++;
         $locked->save();
 
-        $snapshot = ProjectVersionReleaseSnapshot::query()->create([
+        $snapshot = ProjectVersionReleaseSnapshot::createForRelease([
             'project_version_id' => $locked->id,
             'requirement_scope' => $links->map(static fn (RequirementProject $link): array => [
                 'requirement_project_id' => $link->id,
@@ -234,19 +255,26 @@ final class ProjectReleaseService
         }
     }
 
+    private function assertForceActor(ProjectVersion $version, User $actor): void
+    {
+        if ($this->policy->forceRelease($actor, $version)) {
+            return;
+        }
+
+        throw new DomainConflictException(
+            'FORCE_RELEASE_FORBIDDEN',
+            403,
+            ['actor_id' => [$actor->id]],
+            'Only a super administrator may force release a version.',
+        );
+    }
+
     private function assertForceRelease(
         ProjectVersion $version,
         User $actor,
         string $reason,
     ): void {
-        if (! $this->policy->forceRelease($actor, $version)) {
-            throw new DomainConflictException(
-                'FORCE_RELEASE_FORBIDDEN',
-                403,
-                ['actor_id' => [$actor->id]],
-                'Only a super administrator may force release a version.',
-            );
-        }
+        $this->assertForceActor($version, $actor);
 
         if ($reason === '') {
             throw new DomainConflictException(

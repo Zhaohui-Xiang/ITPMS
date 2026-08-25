@@ -3,9 +3,11 @@
 namespace App\Services;
 
 use App\Enums\ProjectDeliveryStatus;
+use App\Enums\ProjectVersionStatus;
 use App\Enums\RequirementStatus;
 use App\Exceptions\DomainConflictException;
 use App\Http\Middleware\AuditLogger;
+use App\Models\ProjectVersion;
 use App\Models\ProjectVersionHistory;
 use App\Models\Requirement;
 use App\Models\RequirementProject;
@@ -15,12 +17,17 @@ use App\Services\Results\RequirementUpdateResult;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
 
 class RequirementWorkflowService
 {
+    public function __construct(
+        private readonly VersionGateLock $versionGateLock,
+    ) {}
+
     private const EDITABLE_FIELDS = [
         'title',
         'description',
@@ -59,11 +66,11 @@ class RequirementWorkflowService
         array $data,
     ): RequirementUpdateResult {
         return DB::transaction(function () use ($requirement, $actor, $data): RequirementUpdateResult {
-            $locked = $this->lockRequirement($requirement);
+            [$locked, $links, $versions] = $this->lockRequirementScope($requirement);
 
             if ($locked->isRejectedForResubmission()) {
                 return RequirementUpdateResult::resubmitted(
-                    $this->resubmitLocked($locked, $actor, $data),
+                    $this->resubmitLocked($locked, $actor, $data, $links, $versions),
                 );
             }
 
@@ -85,7 +92,7 @@ class RequirementWorkflowService
                 }
 
                 $projectIds = $this->normalizeProjectIds($data['project_ids']);
-                $oldProjectIds = $this->lockedProjectIds($locked);
+                $oldProjectIds = $this->lockedProjectIds($links);
             }
 
             $changes = $this->revisionChanges(
@@ -104,7 +111,7 @@ class RequirementWorkflowService
                 ]);
 
                 if ($projectIds !== null && $oldProjectIds !== $projectIds) {
-                    $this->synchronizeProjectLinks($locked, $projectIds);
+                    $this->synchronizeProjectLinks($locked, $projectIds, $links, $versions);
                 }
 
                 $this->createRevisionSnapshot(
@@ -143,7 +150,7 @@ class RequirementWorkflowService
         }
 
         return DB::transaction(function () use ($requirement, $reviewer, $action, $comment): Requirement {
-            $locked = $this->lockRequirement($requirement);
+            [$locked, $links, $versions] = $this->lockRequirementScope($requirement);
 
             if ($locked->status !== RequirementStatus::PENDING_REVIEW->value) {
                 throw ValidationException::withMessages([
@@ -166,7 +173,7 @@ class RequirementWorkflowService
             ]);
 
             if ($action === 'approve') {
-                $this->initializeApprovedProjectsLocked($locked, $reviewer);
+                $this->initializeApprovedProjectsLocked($locked, $reviewer, $links, $versions);
             }
 
             $this->audit($reviewer, $locked, 5, [
@@ -184,11 +191,9 @@ class RequirementWorkflowService
         array $data,
     ): Requirement {
         return DB::transaction(function () use ($requirement, $requester, $data): Requirement {
-            return $this->resubmitLocked(
-                $this->lockRequirement($requirement),
-                $requester,
-                $data,
-            );
+            [$locked, $links, $versions] = $this->lockRequirementScope($requirement);
+
+            return $this->resubmitLocked($locked, $requester, $data, $links, $versions);
         });
     }
 
@@ -197,10 +202,9 @@ class RequirementWorkflowService
         User $actor,
     ): RequirementStatus {
         return DB::transaction(function () use ($requirement, $actor): RequirementStatus {
-            return $this->initializeApprovedProjectsLocked(
-                $this->lockRequirement($requirement),
-                $actor,
-            );
+            [$locked, $links, $versions] = $this->lockRequirementScope($requirement);
+
+            return $this->initializeApprovedProjectsLocked($locked, $actor, $links, $versions);
         });
     }
 
@@ -211,7 +215,9 @@ class RequirementWorkflowService
         User $actor,
     ): RequirementProject {
         return DB::transaction(function () use ($requirement, $projectId, $targetStatus, $actor): RequirementProject {
-            $lockedRequirement = $this->lockRequirement($requirement);
+            [$lockedRequirement, $links, $versions] = $this->lockRequirementScope(
+                $requirement,
+            );
 
             if ($lockedRequirement->status === RequirementStatus::PENDING_REVIEW->value) {
                 throw ValidationException::withMessages([
@@ -219,10 +225,8 @@ class RequirementWorkflowService
                 ]);
             }
 
-            $link = $lockedRequirement->projectLinks()
-                ->where('project_id', $projectId)
-                ->lockForUpdate()
-                ->first();
+            /** @var RequirementProject|null $link */
+            $link = $links->firstWhere('project_id', $projectId);
 
             if ($link === null) {
                 throw ValidationException::withMessages([
@@ -235,10 +239,41 @@ class RequirementWorkflowService
                 $link->project()->firstOrFail(),
             ]);
 
+            if ($link->project_version_id !== null) {
+                /** @var ProjectVersion|null $version */
+                $version = $versions->get($link->project_version_id);
+                if ($version !== null && in_array($version->status, [
+                    ProjectVersionStatus::READY_TO_RELEASE,
+                    ProjectVersionStatus::RELEASED,
+                    ProjectVersionStatus::ARCHIVED,
+                ], true)) {
+                    throw new DomainConflictException(
+                        'VERSION_LOCKED',
+                        errors: [
+                            'project_version_id' => [$version->id],
+                            'status' => ['current' => $version->status->value],
+                        ],
+                        message: 'The current version status is immutable.',
+                    );
+                }
+            }
+
             $target = $targetStatus instanceof ProjectDeliveryStatus
                 ? $targetStatus
                 : $this->deliveryStatusFrom($targetStatus);
             $current = $link->delivery_status;
+
+            if ($current === ProjectDeliveryStatus::PENDING_DEPLOY
+                && $target === ProjectDeliveryStatus::DEPLOYED) {
+                throw new DomainConflictException(
+                    'RELEASE_ACTION_REQUIRED',
+                    errors: ['delivery_status' => [
+                        'current' => $current->value,
+                        'requested' => $target->value,
+                    ]],
+                    message: 'Deployment status may only be created by the release action.',
+                );
+            }
 
             if (! in_array($target, $current->allowedForwardTransitions(), true)) {
                 throw ValidationException::withMessages([
@@ -270,7 +305,7 @@ class RequirementWorkflowService
                 ]);
             }
 
-            $this->recalculateAggregateStatusLocked($lockedRequirement);
+            $this->recalculateAggregateStatusLocked($lockedRequirement, $links);
             $this->audit($actor, $lockedRequirement, 4, [
                 'project_id' => $projectId,
                 'to_delivery_status' => $target->value,
@@ -283,9 +318,9 @@ class RequirementWorkflowService
     public function recalculateAggregateStatus(Requirement $requirement): RequirementStatus
     {
         return DB::transaction(function () use ($requirement): RequirementStatus {
-            return $this->recalculateAggregateStatusLocked(
-                $this->lockRequirement($requirement),
-            );
+            [$locked, $links] = $this->lockRequirementScope($requirement);
+
+            return $this->recalculateAggregateStatusLocked($locked, $links);
         });
     }
 
@@ -293,12 +328,15 @@ class RequirementWorkflowService
         Requirement $locked,
         User $requester,
         array $data,
+        Collection $links,
+        Collection $versions,
     ): Requirement {
         if ($locked->submitter_id !== $requester->id) {
             throw new AuthorizationException(
                 'Only the original requester may resubmit this requirement.',
             );
         }
+        $this->assertVersionScopeMutable($links, $versions);
 
         if (! $locked->isRejectedForResubmission()) {
             throw ValidationException::withMessages([
@@ -306,7 +344,7 @@ class RequirementWorkflowService
             ]);
         }
 
-        $oldProjectIds = $this->lockedProjectIds($locked);
+        $oldProjectIds = $this->lockedProjectIds($links);
         $projectIds = array_key_exists('project_ids', $data)
             ? $this->normalizeProjectIds($data['project_ids'])
             : $oldProjectIds;
@@ -324,7 +362,7 @@ class RequirementWorkflowService
             'updated_by_id' => $requester->id,
         ]);
 
-        $this->synchronizeProjectLinks($locked, $projectIds);
+        $this->synchronizeProjectLinks($locked, $projectIds, $links, $versions);
         $this->createRevisionSnapshot(
             $locked,
             $newVersion,
@@ -343,17 +381,16 @@ class RequirementWorkflowService
     private function initializeApprovedProjectsLocked(
         Requirement $locked,
         User $actor,
+        Collection $links,
+        Collection $versions,
     ): RequirementStatus {
-        $links = $locked->projectLinks()
-            ->orderBy('id')
-            ->lockForUpdate()
-            ->get();
-
         if ($links->isEmpty()) {
             throw ValidationException::withMessages([
                 'project_ids' => 'An approved requirement must have at least one project.',
             ]);
         }
+
+        $this->assertVersionScopeMutable($links, $versions);
 
         foreach ($links as $link) {
             $link->update(['delivery_status' => ProjectDeliveryStatus::ASSIGNED]);
@@ -369,15 +406,11 @@ class RequirementWorkflowService
 
     private function recalculateAggregateStatusLocked(
         Requirement $locked,
+        Collection $links,
     ): RequirementStatus {
         if ($locked->status === RequirementStatus::PENDING_REVIEW->value) {
             return RequirementStatus::PENDING_REVIEW;
         }
-
-        $links = $locked->projectLinks()
-            ->orderBy('id')
-            ->lockForUpdate()
-            ->get();
 
         if ($links->isEmpty()) {
             throw ValidationException::withMessages([
@@ -395,6 +428,77 @@ class RequirementWorkflowService
         }
 
         return $status;
+    }
+
+    /**
+     * Lock order: version gate advisory locks, requirement_project rows,
+     * project_versions rows, then the requirement row.
+     *
+     * @return array{Requirement, Collection<int, RequirementProject>, Collection<int, ProjectVersion>}
+     */
+    private function lockRequirementScope(Requirement $requirement): array
+    {
+        $initialLinks = RequirementProject::query()
+            ->where('requirement_id', $requirement->getKey())
+            ->orderBy('id')
+            ->get(['id', 'project_version_id']);
+        $initialLinkIds = $initialLinks->pluck('id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->all();
+        $initialVersionIds = $initialLinks->pluck('project_version_id')
+            ->filter()
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->unique()
+            ->sort()
+            ->values();
+
+        foreach ($initialVersionIds as $versionId) {
+            $this->versionGateLock->acquire($versionId);
+        }
+
+        $links = RequirementProject::query()
+            ->whereKey($initialLinkIds)
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get();
+        $lockedVersionIds = $links->pluck('project_version_id')
+            ->filter()
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->unique()
+            ->sort()
+            ->values();
+
+        if ($lockedVersionIds->values()->all() !== $initialVersionIds->values()->all()) {
+            throw new DomainConflictException(
+                'REQUIREMENT_SCOPE_CHANGED',
+                errors: ['requirement_id' => [$requirement->getKey()]],
+                message: 'The requirement scope changed. Reload and try again.',
+            );
+        }
+
+        $versions = ProjectVersion::query()
+            ->whereKey($lockedVersionIds->all())
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get()
+            ->keyBy('id');
+        $locked = $this->lockRequirement($requirement);
+        $liveLinkIds = RequirementProject::query()
+            ->where('requirement_id', $locked->id)
+            ->orderBy('id')
+            ->pluck('id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->all();
+
+        if ($liveLinkIds !== $initialLinkIds) {
+            throw new DomainConflictException(
+                'REQUIREMENT_SCOPE_CHANGED',
+                errors: ['requirement_id' => [$locked->id]],
+                message: 'The requirement scope changed. Reload and try again.',
+            );
+        }
+
+        return [$locked, $links, $versions];
     }
 
     private function lockRequirement(Requirement $requirement): Requirement
@@ -429,13 +533,13 @@ class RequirementWorkflowService
     /**
      * @return list<int>
      */
-    private function lockedProjectIds(Requirement $requirement): array
+    private function lockedProjectIds(Collection $links): array
     {
-        return $requirement->projectLinks()
-            ->orderBy('project_id')
-            ->lockForUpdate()
+        return $links
             ->pluck('project_id')
             ->map(static fn (mixed $projectId): int => (int) $projectId)
+            ->sort()
+            ->values()
             ->all();
     }
 
@@ -488,12 +592,11 @@ class RequirementWorkflowService
     private function synchronizeProjectLinks(
         Requirement $requirement,
         array $projectIds,
+        Collection $lockedLinks,
+        Collection $versions,
     ): void {
-        $links = $requirement->projectLinks()
-            ->orderBy('id')
-            ->lockForUpdate()
-            ->get()
-            ->keyBy('project_id');
+        $this->assertVersionScopeMutable($lockedLinks, $versions);
+        $links = $lockedLinks->keyBy('project_id');
 
         foreach ($links as $projectId => $link) {
             if (! in_array((int) $projectId, $projectIds, true)) {
@@ -508,6 +611,34 @@ class RequirementWorkflowService
         foreach ($projectIds as $projectId) {
             if (! $links->has($projectId)) {
                 $this->createProjectLink($requirement, $projectId);
+            }
+        }
+    }
+
+    private function assertVersionScopeMutable(
+        Collection $links,
+        Collection $versions,
+    ): void {
+        foreach ($links as $link) {
+            if ($link->project_version_id === null) {
+                continue;
+            }
+
+            /** @var ProjectVersion|null $version */
+            $version = $versions->get($link->project_version_id);
+            if ($version !== null && in_array($version->status, [
+                ProjectVersionStatus::READY_TO_RELEASE,
+                ProjectVersionStatus::RELEASED,
+                ProjectVersionStatus::ARCHIVED,
+            ], true)) {
+                throw new DomainConflictException(
+                    'VERSION_LOCKED',
+                    errors: [
+                        'project_version_id' => [$version->id],
+                        'status' => ['current' => $version->status->value],
+                    ],
+                    message: 'The current version status is immutable.',
+                );
             }
         }
     }

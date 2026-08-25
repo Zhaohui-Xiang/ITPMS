@@ -7,8 +7,18 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class ProjectVersionReleaseSnapshot extends Model
 {
+    private static int $releaseCreationDepth = 0;
+
     protected static function booted(): void
     {
+        static::creating(static function (): void {
+            if (self::$releaseCreationDepth === 0) {
+                throw new \LogicException(
+                    'Project version release snapshots may only be created by the release service.',
+                );
+            }
+        });
+
         $rejectMutation = static function (): never {
             throw new \LogicException('Project version release snapshots are immutable.');
         };
@@ -40,6 +50,23 @@ class ProjectVersionReleaseSnapshot extends Model
         'is_override' => 'boolean',
         'released_at' => 'datetime',
     ];
+
+    /**
+     * @param  array<string, mixed>  $attributes
+     */
+    public static function createForRelease(array $attributes): self
+    {
+        self::$releaseCreationDepth++;
+
+        try {
+            /** @var self $snapshot */
+            $snapshot = self::query()->create($attributes);
+
+            return $snapshot;
+        } finally {
+            self::$releaseCreationDepth--;
+        }
+    }
 
     public function projectVersion(): BelongsTo
     {

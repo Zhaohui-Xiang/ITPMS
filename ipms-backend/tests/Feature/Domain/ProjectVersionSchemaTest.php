@@ -250,7 +250,7 @@ class ProjectVersionSchemaTest extends TestCase
     {
         $version = ProjectVersion::factory()->create();
         $actor = User::factory()->internal()->create();
-        ProjectVersionReleaseSnapshot::create([
+        ProjectVersionReleaseSnapshot::createForRelease([
             'project_version_id' => $version->id,
             'requirement_scope' => [],
             'task_count' => 0,
@@ -281,10 +281,10 @@ class ProjectVersionSchemaTest extends TestCase
             'released_at' => now(),
         ];
 
-        ProjectVersionReleaseSnapshot::create($attributes);
+        ProjectVersionReleaseSnapshot::createForRelease($attributes);
 
         $this->expectException(QueryException::class);
-        ProjectVersionReleaseSnapshot::create($attributes);
+        ProjectVersionReleaseSnapshot::createForRelease($attributes);
     }
 
     public function test_project_and_requirement_relations_expose_delivery_pivot_data(): void
@@ -329,7 +329,7 @@ class ProjectVersionSchemaTest extends TestCase
             'metadata' => ['source' => 'test'],
             'created_at' => now(),
         ]);
-        $snapshot = ProjectVersionReleaseSnapshot::create([
+        $snapshot = ProjectVersionReleaseSnapshot::createForRelease([
             'project_version_id' => $version->id,
             'requirement_scope' => [['requirement_id' => 1]],
             'task_count' => 1,

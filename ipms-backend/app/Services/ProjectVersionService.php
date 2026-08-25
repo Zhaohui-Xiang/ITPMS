@@ -35,6 +35,7 @@ final class ProjectVersionService
 
     public function __construct(
         private readonly ReleaseGateService $releaseGateService,
+        private readonly VersionGateLock $versionGateLock,
     ) {}
 
     public function create(Project $project, array $data, User $actor): ProjectVersion
@@ -91,6 +92,7 @@ final class ProjectVersionService
             $actor,
             $reason,
         ): ProjectVersion {
+            $this->versionGateLock->acquire($version->id);
             $locked = $this->lockVersion($version->id);
             $this->assertExpectedLock($locked, $expectedLock);
 
@@ -356,16 +358,35 @@ final class ProjectVersionService
         ProjectVersion $version,
         RequirementProject $link,
     ): array {
+        $initialVersionId = RequirementProject::query()
+            ->whereKey($link->getKey())
+            ->value('project_version_id');
+        $versionIds = collect([$version->id, $initialVersionId])
+            ->filter()
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->unique()
+            ->sort()
+            ->values();
+
+        foreach ($versionIds as $versionId) {
+            $this->versionGateLock->acquire($versionId);
+        }
+
         $lockedLink = RequirementProject::query()
             ->whereKey($link->getKey())
             ->orderBy('id')
             ->lockForUpdate()
             ->firstOrFail();
 
-        $versions = $this->lockVersions([
-            $version->id,
-            $lockedLink->project_version_id,
-        ]);
+        if ($lockedLink->project_version_id !== $initialVersionId) {
+            throw new DomainConflictException(
+                'VERSION_SCOPE_CHANGED',
+                errors: ['requirement_project_id' => [$lockedLink->id]],
+                message: 'The version scope changed. Reload and try again.',
+            );
+        }
+
+        $versions = $this->lockVersions($versionIds->all());
 
         return [$lockedLink, $versions];
     }

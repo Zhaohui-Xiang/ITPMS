@@ -5,6 +5,7 @@ namespace Tests\Feature\Services;
 use App\Enums\ProjectDeliveryStatus;
 use App\Enums\ProjectVersionStatus;
 use App\Enums\RequirementStatus;
+use App\Exceptions\DomainConflictException;
 use App\Models\Permission;
 use App\Models\Project;
 use App\Models\ProjectVersion;
@@ -1197,6 +1198,71 @@ class RequirementWorkflowServiceTest extends TestCase
                 ->count(),
         );
         $this->assertDatabaseCount('audit_logs', 5);
+    }
+
+    public function test_external_delivery_transition_rejects_locked_versions_and_deployment_action(): void
+    {
+        $actor = $this->userWithPermission('it_pm', 'requirement.transition');
+        $project = Project::factory()->create();
+        DB::table('project_members')->insert([
+            'project_id' => $project->id,
+            'user_id' => $actor->id,
+            'role_in_project' => 'pm',
+            'assigned_at' => now(),
+        ]);
+
+        foreach ([
+            ProjectVersionStatus::READY_TO_RELEASE,
+            ProjectVersionStatus::RELEASED,
+            ProjectVersionStatus::ARCHIVED,
+        ] as $status) {
+            $version = ProjectVersion::factory()->for($project)->create(['status' => $status]);
+            $link = RequirementProject::factory()->forVersion($version)->create([
+                'delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY,
+            ]);
+
+            try {
+                $this->service()->transitionProjectDelivery(
+                    $link->requirement,
+                    $project->id,
+                    ProjectDeliveryStatus::DEPLOYED,
+                    $actor,
+                );
+                $this->fail('Expected locked version delivery conflict.');
+            } catch (DomainConflictException $exception) {
+                $this->assertSame('VERSION_LOCKED', $exception->errorCode);
+                $this->assertSame(409, $exception->status);
+                $this->assertSame([
+                    'project_version_id' => [$version->id],
+                    'status' => ['current' => $status->value],
+                ], $exception->errors);
+            }
+            $this->assertSame(ProjectDeliveryStatus::PENDING_DEPLOY, $link->fresh()->delivery_status);
+        }
+
+        $testing = ProjectVersion::factory()->for($project)->inTesting()->create();
+        $link = RequirementProject::factory()->forVersion($testing)->create([
+            'delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY,
+        ]);
+        try {
+            $this->service()->transitionProjectDelivery(
+                $link->requirement,
+                $project->id,
+                ProjectDeliveryStatus::DEPLOYED,
+                $actor,
+            );
+            $this->fail('Expected release-only deployment conflict.');
+        } catch (DomainConflictException $exception) {
+            $this->assertSame('RELEASE_ACTION_REQUIRED', $exception->errorCode);
+            $this->assertSame(409, $exception->status);
+            $this->assertSame([
+                'delivery_status' => [
+                    'current' => ProjectDeliveryStatus::PENDING_DEPLOY->value,
+                    'requested' => ProjectDeliveryStatus::DEPLOYED->value,
+                ],
+            ], $exception->errors);
+        }
+        $this->assertSame(ProjectDeliveryStatus::PENDING_DEPLOY, $link->fresh()->delivery_status);
     }
 
     private function service(): RequirementWorkflowService

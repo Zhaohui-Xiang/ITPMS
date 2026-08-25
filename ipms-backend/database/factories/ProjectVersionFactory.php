@@ -14,6 +14,7 @@ use App\Models\RequirementProject;
 use App\Models\Task;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
+use Illuminate\Support\Facades\DB;
 
 /**
  * @extends Factory<ProjectVersion>
@@ -62,20 +63,41 @@ class ProjectVersionFactory extends Factory
     public function withPassingScope(): static
     {
         return $this->afterCreating(function (ProjectVersion $version): void {
-            RequirementProject::factory()->forVersion($version)->create([
-                'delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY->value,
-            ]);
+            $originalStatus = $version->status;
+            $scopeLocked = in_array($originalStatus, [
+                ProjectVersionStatus::READY_TO_RELEASE,
+                ProjectVersionStatus::RELEASED,
+                ProjectVersionStatus::ARCHIVED,
+            ], true);
 
-            Task::factory()->forVersionScope($version)->create([
-                'status' => TaskStatus::COMPLETED->value,
-                'completed_at' => now(),
-            ]);
+            if ($scopeLocked) {
+                DB::table('project_versions')->where('id', $version->id)->update([
+                    'status' => ProjectVersionStatus::IN_TESTING->value,
+                ]);
+            }
 
-            Defect::factory()->forVersionScope($version)->create([
-                'severity' => DefectSeverity::SERIOUS->value,
-                'status' => DefectStatus::CLOSED->value,
-                'closed_at' => now(),
-            ]);
+            try {
+                RequirementProject::factory()->forVersion($version)->create([
+                    'delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY->value,
+                ]);
+
+                Task::factory()->forVersionScope($version)->create([
+                    'status' => TaskStatus::COMPLETED->value,
+                    'completed_at' => now(),
+                ]);
+
+                Defect::factory()->forVersionScope($version)->create([
+                    'severity' => DefectSeverity::SERIOUS->value,
+                    'status' => DefectStatus::CLOSED->value,
+                    'closed_at' => now(),
+                ]);
+            } finally {
+                if ($scopeLocked) {
+                    DB::table('project_versions')->where('id', $version->id)->update([
+                        'status' => $originalStatus->value,
+                    ]);
+                }
+            }
         });
     }
 }

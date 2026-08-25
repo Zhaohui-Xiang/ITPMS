@@ -316,9 +316,7 @@ class ReleaseGateServiceTest extends TestCase
 
     public function test_archived_requires_acceptance_and_all_scope_defects_closed(): void
     {
-        $version = ProjectVersion::factory()->create([
-            'status' => ProjectVersionStatus::RELEASED->value,
-        ]);
+        $version = ProjectVersion::factory()->inTesting()->create();
         $link = RequirementProject::factory()->forVersion($version)->create([
             'delivery_status' => ProjectDeliveryStatus::DEPLOYED->value,
         ]);

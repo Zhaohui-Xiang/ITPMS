@@ -3,9 +3,11 @@
 use App\Exceptions\DomainConflictException;
 use App\Http\Middleware\AuditLogger;
 use App\Http\Middleware\CheckPermission;
+use App\Services\VersionGateLock;
 use App\Support\ApiResponse;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -72,6 +74,24 @@ return Application::configure(basePath: dirname(__DIR__))
             if ($request->is('api/*')) {
                 return ApiResponse::error('FORBIDDEN', $exception->getMessage(), 403);
             }
+        });
+
+        $exceptions->render(function (QueryException $exception, Request $request) {
+            if (! $request->is('api/*')) {
+                return null;
+            }
+
+            $conflict = VersionGateLock::mutationConflict($exception);
+            if ($conflict === null) {
+                return null;
+            }
+
+            return ApiResponse::error(
+                $conflict->errorCode,
+                $conflict->getMessage(),
+                $conflict->status,
+                $conflict->errors,
+            );
         });
 
         $exceptions->render(function (DomainConflictException $exception, Request $request) {

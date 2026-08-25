@@ -45,7 +45,7 @@ class ProjectReleaseServiceTest extends TestCase
     {
         Event::fake([ProjectVersionReleased::class]);
         [$manager, $project] = $this->managedProject();
-        $version = ProjectVersion::factory()->for($project)->ready()->withPassingScope()->create([
+        $version = ProjectVersion::factory()->for($project)->inTesting()->withPassingScope()->create([
             'lock_version' => 5,
         ]);
         $link = $version->requirementLinks()->sole();
@@ -59,6 +59,9 @@ class ProjectReleaseServiceTest extends TestCase
         Defect::factory()->forVersionScope($version)->create([
             'severity' => DefectSeverity::MINOR->value,
             'status' => DefectStatus::REOPENED->value,
+        ]);
+        DB::table('project_versions')->where('id', $version->id)->update([
+            'status' => ProjectVersionStatus::READY_TO_RELEASE->value,
         ]);
 
         $released = $this->release($version, $manager, 5, '  Completed release  ');
@@ -126,7 +129,7 @@ class ProjectReleaseServiceTest extends TestCase
         ]);
         $this->assertUntouched($stale, 3);
 
-        $blocked = ProjectVersion::factory()->for($project)->ready()->create(['release_notes' => null]);
+        $blocked = ProjectVersion::factory()->for($project)->inTesting()->create(['release_notes' => null]);
         $link = RequirementProject::factory()->forVersion($blocked)->create([
             'delivery_status' => ProjectDeliveryStatus::IN_TESTING->value,
         ]);
@@ -134,6 +137,9 @@ class ProjectReleaseServiceTest extends TestCase
         Defect::factory()->forVersionScope($blocked)->create([
             'severity' => DefectSeverity::FATAL->value,
             'status' => DefectStatus::CONFIRMED->value,
+        ]);
+        DB::table('project_versions')->where('id', $blocked->id)->update([
+            'status' => ProjectVersionStatus::READY_TO_RELEASE->value,
         ]);
         try {
             $this->release($blocked, $manager, 1, ' ');
@@ -175,7 +181,7 @@ class ProjectReleaseServiceTest extends TestCase
         );
         $this->assertUntouched($reasonless);
 
-        foreach ([1, 2, 3, 6, 7] as $status) {
+        foreach ([1, 2, 3, 7] as $status) {
             $invalid = ProjectVersion::factory()->for($project)->create(['status' => $status]);
             $this->conflict(
                 fn () => $this->release($invalid, $admin, force: true, reason: 'Emergency'),
@@ -185,6 +191,26 @@ class ProjectReleaseServiceTest extends TestCase
             );
             $this->assertUntouched($invalid, 1, ProjectVersionStatus::from($status));
         }
+
+        $releasedWithoutSnapshot = ProjectVersion::factory()->for($project)->create([
+            'status' => ProjectVersionStatus::RELEASED,
+        ]);
+        $this->conflict(
+            fn () => $this->release(
+                $releasedWithoutSnapshot,
+                $admin,
+                force: true,
+                reason: 'Emergency',
+            ),
+            'RELEASE_SNAPSHOT_MISSING',
+            409,
+            ['project_version_id' => [$releasedWithoutSnapshot->id]],
+        );
+        $this->assertUntouched(
+            $releasedWithoutSnapshot,
+            1,
+            ProjectVersionStatus::RELEASED,
+        );
         Event::assertNotDispatched(ProjectVersionReleased::class);
     }
 
@@ -469,6 +495,140 @@ class ProjectReleaseServiceTest extends TestCase
             );
         } else {
             $this->assertSame($source->id, $moving->project_version_id);
+        }
+    }
+
+    public function test_force_release_replay_is_idempotent_and_missing_snapshot_is_invariant_error(): void
+    {
+        Event::fake([ProjectVersionReleased::class]);
+        [$manager, $project] = $this->managedProject();
+        $admin = $this->userWithRole('super_admin');
+        $version = ProjectVersion::factory()->for($project)->inTesting()->withPassingScope()->create([
+            'lock_version' => 4,
+        ]);
+
+        $first = $this->release($version, $admin, 4, 'Patch', true, 'Emergency');
+        $before = [
+            $first->lock_version,
+            $first->released_at->toISOString(),
+            ProjectVersionHistory::count(),
+            AuditLog::count(),
+            ProjectVersionReleaseSnapshot::count(),
+        ];
+
+        $second = $this->release($version, $admin, 4, 'Ignored', true, null);
+
+        $this->assertSame($before, [
+            $second->lock_version,
+            $second->released_at->toISOString(),
+            ProjectVersionHistory::count(),
+            AuditLog::count(),
+            ProjectVersionReleaseSnapshot::count(),
+        ]);
+        Event::assertDispatchedTimes(ProjectVersionReleased::class, 1);
+
+        $broken = ProjectVersion::factory()->for($project)->create([
+            'status' => ProjectVersionStatus::RELEASED,
+            'released_at' => now(),
+            'released_by_id' => $admin->id,
+        ]);
+        $this->conflict(
+            fn () => $this->release($broken, $admin, force: true, reason: null),
+            'RELEASE_SNAPSHOT_MISSING',
+            409,
+            ['project_version_id' => [$broken->id]],
+        );
+    }
+
+    public function test_idempotent_release_still_requires_the_snapshot_mode_actor(): void
+    {
+        [$manager, $project] = $this->managedProject();
+        $admin = $this->userWithRole('super_admin');
+        $otherManager = $this->userWithRole('it_pm');
+        $normal = ProjectVersion::factory()->for($project)->ready()->withPassingScope()->create();
+        $this->release($normal, $manager);
+
+        $this->conflict(
+            fn () => $this->release($normal, $otherManager),
+            'VERSION_RELEASE_FORBIDDEN',
+            403,
+            ['actor_id' => [$otherManager->id]],
+        );
+        $this->conflict(
+            fn () => $this->release($normal, $admin, force: true, reason: null),
+            'RELEASE_MODE_MISMATCH',
+            409,
+            ['force' => ['expected' => false]],
+        );
+    }
+
+    public function test_release_command_rejects_coerced_force_and_lock_types(): void
+    {
+        [$manager, $project] = $this->managedProject();
+        $version = ProjectVersion::factory()->for($project)->ready()->withPassingScope()->create();
+
+        foreach ([
+            ['force' => 'false', 'lock_version' => 1, 'field' => 'force'],
+            ['force' => false, 'lock_version' => '1', 'field' => 'lock_version'],
+        ] as $case) {
+            try {
+                $this->service()->release($version, $manager, [
+                    'force' => $case['force'],
+                    'lock_version' => $case['lock_version'],
+                    'release_notes' => 'Release',
+                ]);
+                $this->fail('Expected strict release command validation.');
+            } catch (DomainConflictException $exception) {
+                $this->assertSame('INVALID_RELEASE_COMMAND', $exception->errorCode);
+                $this->assertSame(422, $exception->status);
+                $this->assertArrayHasKey($case['field'], $exception->errors);
+            }
+        }
+        $this->assertUntouched($version);
+    }
+
+    public function test_snapshot_database_rows_are_immutable_and_direct_model_create_is_forbidden(): void
+    {
+        [$manager, $project] = $this->managedProject();
+        $version = ProjectVersion::factory()->for($project)->ready()->withPassingScope()->create();
+        $this->release($version, $manager);
+        $snapshot = ProjectVersionReleaseSnapshot::query()->sole();
+        $stored = $snapshot->getRawOriginal();
+
+        foreach (['update', 'delete'] as $operation) {
+            try {
+                $operation === 'update'
+                    ? DB::table('project_version_release_snapshots')
+                        ->where('id', $snapshot->id)
+                        ->update(['release_notes' => 'Bypass'])
+                    : DB::table('project_version_release_snapshots')
+                        ->where('id', $snapshot->id)
+                        ->delete();
+                $this->fail("Expected database snapshot {$operation} to fail.");
+            } catch (QueryException $exception) {
+                $this->assertSame('IV002', $exception->getCode());
+            }
+            $this->assertSame($stored, $snapshot->fresh()->getRawOriginal());
+        }
+
+        $unreleased = ProjectVersion::factory()->for($project)->ready()->create();
+        try {
+            ProjectVersionReleaseSnapshot::query()->create([
+                'project_version_id' => $unreleased->id,
+                'requirement_scope' => [],
+                'task_count' => 0,
+                'defect_count' => 0,
+                'gate_result' => [],
+                'is_override' => false,
+                'released_by_id' => $manager->id,
+                'released_at' => now(),
+            ]);
+            $this->fail('Expected direct release snapshot creation to be rejected.');
+        } catch (LogicException $exception) {
+            $this->assertSame(
+                'Project version release snapshots may only be created by the release service.',
+                $exception->getMessage(),
+            );
         }
     }
 
