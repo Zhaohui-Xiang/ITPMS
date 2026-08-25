@@ -7,6 +7,16 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class ProjectVersionReleaseSnapshot extends Model
 {
+    protected static function booted(): void
+    {
+        $rejectMutation = static function (): never {
+            throw new \LogicException('Project version release snapshots are immutable.');
+        };
+
+        static::updating($rejectMutation);
+        static::deleting($rejectMutation);
+    }
+
     public $timestamps = false;
 
     protected $fillable = [
