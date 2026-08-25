@@ -725,6 +725,56 @@ SQL);
             ->all();
     }
 
+    public function test_owner_nullable_migration_rolls_back_safely_and_reapplies(): void
+    {
+        $this->assertSame('pgsql', DB::connection()->getDriverName());
+        $actor = User::factory()->internal()->create();
+        $version = $this->service()->create(
+            Project::factory()->create(),
+            [
+                'code' => 'ROLLBACK-OWNER',
+                'name' => 'Rollback owner safety',
+                'owner_id' => null,
+            ],
+            $actor,
+        );
+        $this->assertNull($version->owner_id);
+
+        $migration = require database_path(
+            'migrations/2026_08_25_000030_allow_draft_project_version_without_owner.php',
+        );
+
+        try {
+            $migration->down();
+
+            $this->assertSame($actor->id, $version->fresh()->owner_id);
+            $this->assertSame('NO', $this->ownerColumnNullable());
+
+            $migration->up();
+
+            $this->assertSame('YES', $this->ownerColumnNullable());
+            DB::table('project_versions')
+                ->where('id', $version->id)
+                ->update(['owner_id' => null]);
+            $this->assertNull($version->fresh()->owner_id);
+        } finally {
+            if ($this->ownerColumnNullable() !== 'YES') {
+                $migration->up();
+            }
+        }
+    }
+
+    private function ownerColumnNullable(): string
+    {
+        return DB::selectOne(<<<'SQL'
+            SELECT is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'project_versions'
+              AND column_name = 'owner_id'
+            SQL)->is_nullable;
+    }
+
     private function service(): ProjectVersionService
     {
         return app(ProjectVersionService::class);
