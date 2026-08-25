@@ -3,7 +3,9 @@
 namespace Database\Seeders;
 
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use LogicException;
 
 class RolePermissionSeeder extends Seeder
 {
@@ -24,8 +26,6 @@ class RolePermissionSeeder extends Seeder
         // IT PM
         $this->assignPermissions($roles['it_pm'], [
             'project.view', 'project.archive',
-            'project_version.view', 'project_version.create', 'project_version.edit',
-            'project_version.transition', 'project_version.release',
             'requirement.create', 'requirement.edit', 'requirement.view',
             'requirement.approve', 'requirement.assign', 'requirement.transition',
             'task.create', 'task.edit', 'task.assign', 'task.view',
@@ -36,7 +36,7 @@ class RolePermissionSeeder extends Seeder
 
         // IT Member
         $this->assignPermissions($roles['it_member'], [
-            'project.view', 'project_version.view',
+            'project.view',
             'requirement.create', 'requirement.edit', 'requirement.view', 'requirement.transition',
             'task.create', 'task.edit', 'task.view',
             'defect.create', 'defect.edit', 'defect.view',
@@ -46,7 +46,7 @@ class RolePermissionSeeder extends Seeder
 
         // Supplier PM
         $this->assignPermissions($roles['supplier_pm'], [
-            'project.view', 'project_version.view',
+            'project.view',
             'requirement.view', 'requirement.transition',
             'task.create', 'task.edit', 'task.assign', 'task.view',
             'defect.create', 'defect.edit', 'defect.fix', 'defect.view',
@@ -56,7 +56,7 @@ class RolePermissionSeeder extends Seeder
 
         // Supplier Dev
         $this->assignPermissions($roles['supplier_dev'], [
-            'project.view', 'project_version.view',
+            'project.view',
             'requirement.view',
             'task.view', 'task.claim', 'task.update_status',
             'defect.view', 'defect.fix',
@@ -66,7 +66,7 @@ class RolePermissionSeeder extends Seeder
 
         // Supplier Tester
         $this->assignPermissions($roles['supplier_tester'], [
-            'project.view', 'project_version.view',
+            'project.view',
             'requirement.view',
             'task.view', 'task.claim', 'task.update_status',
             'defect.create', 'defect.edit', 'defect.view',
@@ -76,11 +76,61 @@ class RolePermissionSeeder extends Seeder
 
         // Requester (system user)
         $this->assignPermissions($roles['requester'], [
-            'project_version.view',
             'requirement.create', 'requirement.edit', 'requirement.view', 'requirement.transition',
             'defect.create', 'defect.view',
             'audit.view_scoped',
         ]);
+
+        $this->syncProjectVersionPermissions($roles);
+    }
+
+    private function syncProjectVersionPermissions(Collection $roles): void
+    {
+        $approvedCodes = [
+            'super_admin' => [
+                'project_version.view',
+                'project_version.create',
+                'project_version.edit',
+                'project_version.transition',
+                'project_version.release',
+                'project_version.override',
+            ],
+            'it_pm' => [
+                'project_version.view',
+                'project_version.create',
+                'project_version.edit',
+                'project_version.transition',
+                'project_version.release',
+            ],
+            'it_member' => ['project_version.view'],
+            'supplier_pm' => ['project_version.view'],
+            'supplier_dev' => ['project_version.view'],
+            'supplier_tester' => ['project_version.view'],
+            'requester' => ['project_version.view'],
+        ];
+        $permissionCodes = array_values(array_unique(array_merge(...array_values($approvedCodes))));
+        $permissionIds = DB::table('permissions')
+            ->whereIn('code', $permissionCodes)
+            ->pluck('id', 'code');
+
+        if ($permissionIds->count() !== count($permissionCodes)) {
+            throw new LogicException('All project version permissions must exist before role synchronization.');
+        }
+
+        DB::transaction(function () use ($approvedCodes, $permissionIds, $roles): void {
+            DB::table('permission_role')
+                ->whereIn('permission_id', $permissionIds->values())
+                ->delete();
+
+            foreach ($approvedCodes as $roleCode => $codes) {
+                foreach ($codes as $code) {
+                    DB::table('permission_role')->insert([
+                        'role_id' => $roles[$roleCode],
+                        'permission_id' => $permissionIds[$code],
+                    ]);
+                }
+            }
+        });
     }
 
     private function assignPermissions(int $roleId, array $permCodes): void

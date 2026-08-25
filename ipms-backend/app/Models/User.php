@@ -92,33 +92,55 @@ class User extends Authenticatable
     public function getSupplierDescendantOrgIds(): array
     {
         return cache()->remember("user_{$this->id}_supplier_org_ids", 300, function (): array {
-            $supplierOrgIds = $this->organizations()
-                ->where('org_type', 2)
-                ->pluck('organizations.id')
-                ->map(static fn ($id): int => (int) $id)
-                ->all();
+            $rows = DB::select(
+                <<<'SQL'
+                    WITH RECURSIVE supplier_ancestors AS (
+                        SELECT organization.id, organization.parent_id
+                        FROM organizations AS organization
+                        INNER JOIN organization_user AS membership
+                            ON membership.organization_id = organization.id
+                        WHERE membership.user_id = :user_id
+                            AND organization.org_type = 2
 
-            $descendantOrgIds = array_fill_keys($supplierOrgIds, true);
-            $frontier = $supplierOrgIds;
+                        UNION
 
-            while ($frontier !== []) {
-                $children = DB::table('organizations')
-                    ->whereIn('parent_id', $frontier)
-                    ->pluck('id')
-                    ->map(static fn ($id): int => (int) $id)
-                    ->all();
+                        SELECT parent.id, parent.parent_id
+                        FROM organizations AS parent
+                        INNER JOIN supplier_ancestors AS child
+                            ON child.parent_id = parent.id
+                        WHERE parent.org_type = 2
+                    ),
+                    supplier_roots AS (
+                        SELECT DISTINCT ancestor.id, ancestor.parent_id
+                        FROM supplier_ancestors AS ancestor
+                        LEFT JOIN organizations AS parent
+                            ON parent.id = ancestor.parent_id
+                            AND parent.org_type = 2
+                        WHERE parent.id IS NULL
+                    ),
+                    supplier_tree AS (
+                        SELECT root.id, root.parent_id
+                        FROM supplier_roots AS root
 
-                $frontier = array_values(array_filter(
-                    $children,
-                    static fn (int $id): bool => ! isset($descendantOrgIds[$id]),
-                ));
+                        UNION
 
-                foreach ($frontier as $id) {
-                    $descendantOrgIds[$id] = true;
-                }
-            }
+                        SELECT child.id, child.parent_id
+                        FROM organizations AS child
+                        INNER JOIN supplier_tree AS parent
+                            ON child.parent_id = parent.id
+                        WHERE child.org_type = 2
+                    )
+                    SELECT DISTINCT id
+                    FROM supplier_tree
+                    ORDER BY id
+                SQL,
+                ['user_id' => $this->id],
+            );
 
-            return array_keys($descendantOrgIds);
+            return array_map(
+                static fn (object $row): int => (int) $row->id,
+                $rows,
+            );
         });
     }
 }
