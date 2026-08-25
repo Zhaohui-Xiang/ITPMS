@@ -72,6 +72,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/{id}', [RequirementController::class, 'show']);
         Route::put('/{id}', [RequirementController::class, 'update']);
         Route::post('/{id}/review', [RequirementController::class, 'review']);
+        Route::post('/{id}/resubmit', [RequirementController::class, 'resubmit']);
         Route::post('/{id}/status', [RequirementController::class, 'transition']);
         Route::get('/{id}/versions', [RequirementController::class, 'versions']);
         Route::get('/{id}/versions/{vid}', [RequirementController::class, 'versionDetail']);

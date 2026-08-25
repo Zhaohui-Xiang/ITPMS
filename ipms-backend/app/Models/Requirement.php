@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\RequirementStatus;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -92,5 +93,13 @@ class Requirement extends Model
     public function apiDocuments(): HasMany
     {
         return $this->hasMany(ApiDocument::class);
+    }
+
+    public function isRejectedForResubmission(): bool
+    {
+        return $this->status === RequirementStatus::PENDING_REVIEW->value
+            && $this->reviewer_id !== null
+            && $this->reviewed_at !== null
+            && filled($this->review_comment);
     }
 }
