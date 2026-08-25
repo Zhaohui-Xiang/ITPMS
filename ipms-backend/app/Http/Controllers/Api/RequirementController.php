@@ -139,16 +139,15 @@ class RequirementController extends Controller
             return ApiResponse::error('REQUIREMENT_UPDATE_FORBIDDEN', 'You are not allowed to edit this requirement.', 403);
         }
 
-        $wasRejected = $requirement->isRejectedForResubmission();
-        $requirement = $this->workflow->update(
+        $result = $this->workflow->update(
             $requirement,
             $user,
             $request->validated(),
         );
 
         return ApiResponse::success(
-            $requirement,
-            $wasRejected ? 'Requirement resubmitted.' : 'Requirement updated.',
+            $result->requirement,
+            $result->message(),
         );
     }
 

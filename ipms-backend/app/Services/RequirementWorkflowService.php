@@ -11,6 +11,7 @@ use App\Models\Requirement;
 use App\Models\RequirementProject;
 use App\Models\RequirementVersion;
 use App\Models\User;
+use App\Services\Results\RequirementUpdateResult;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Arr;
@@ -56,12 +57,14 @@ class RequirementWorkflowService
         Requirement $requirement,
         User $actor,
         array $data,
-    ): Requirement {
-        return DB::transaction(function () use ($requirement, $actor, $data): Requirement {
+    ): RequirementUpdateResult {
+        return DB::transaction(function () use ($requirement, $actor, $data): RequirementUpdateResult {
             $locked = $this->lockRequirement($requirement);
 
             if ($locked->isRejectedForResubmission()) {
-                return $this->resubmitLocked($locked, $actor, $data);
+                return RequirementUpdateResult::resubmitted(
+                    $this->resubmitLocked($locked, $actor, $data),
+                );
             }
 
             $projectIds = null;
@@ -71,7 +74,7 @@ class RequirementWorkflowService
                 if ($locked->status !== RequirementStatus::PENDING_REVIEW->value) {
                     throw new DomainConflictException(
                         'REQUIREMENT_PROJECT_SCOPE_LOCKED',
-                        'Project links cannot be changed after requirement approval.',
+                        message: 'Project links cannot be changed after requirement approval.',
                     );
                 }
 
@@ -115,7 +118,9 @@ class RequirementWorkflowService
 
             $this->audit($actor, $locked, 2, ['changes' => $changes]);
 
-            return $this->freshRequirement($locked);
+            return RequirementUpdateResult::updated(
+                $this->freshRequirement($locked),
+            );
         });
     }
 
@@ -535,11 +540,10 @@ class RequirementWorkflowService
                 'changes' => $changes,
                 'change_summary' => $summary,
             ]);
-        } catch (UniqueConstraintViolationException $exception) {
+        } catch (UniqueConstraintViolationException) {
             throw new DomainConflictException(
                 'REQUIREMENT_VERSION_CONFLICT',
-                'The requirement was revised concurrently. Reload and try again.',
-                $exception,
+                message: 'The requirement was revised concurrently. Reload and try again.',
             );
         }
     }

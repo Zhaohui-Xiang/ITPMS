@@ -79,7 +79,8 @@ return Application::configure(basePath: dirname(__DIR__))
                 return ApiResponse::error(
                     $exception->errorCode,
                     $exception->getMessage(),
-                    409,
+                    $exception->status,
+                    $exception->errors,
                 );
             }
         });

@@ -3,15 +3,15 @@
 namespace App\Exceptions;
 
 use RuntimeException;
-use Throwable;
 
 class DomainConflictException extends RuntimeException
 {
     public function __construct(
         public readonly string $errorCode,
-        string $message,
-        ?Throwable $previous = null,
+        public readonly int $status = 409,
+        public readonly array $errors = [],
+        ?string $message = null,
     ) {
-        parent::__construct($message, 0, $previous);
+        parent::__construct($message ?? $errorCode);
     }
 }

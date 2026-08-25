@@ -14,6 +14,7 @@ use App\Models\RequirementVersion;
 use App\Models\Role;
 use App\Models\User;
 use App\Services\RequirementWorkflowService;
+use App\Services\Results\RequirementUpdateResult;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -899,6 +900,135 @@ class RequirementWorkflowServiceTest extends TestCase
         $this->assertDatabaseCount('project_version_histories', 0);
         $this->assertDatabaseCount('requirement_versions', 0);
         $this->assertDatabaseCount('audit_logs', 0);
+    }
+
+    public function test_update_result_reports_the_action_decided_under_lock(): void
+    {
+        $requester = User::factory()->systemUser()->create();
+        $reviewer = User::factory()->internal()->create();
+        $project = Project::factory()->create();
+        $pending = Requirement::factory()->create([
+            'submitter_id' => $requester->id,
+            'created_by_id' => $requester->id,
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+        ]);
+        RequirementProject::factory()->for($pending)->for($project)->create();
+        $rejected = Requirement::factory()->create([
+            'submitter_id' => $requester->id,
+            'created_by_id' => $requester->id,
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+            'reviewer_id' => $reviewer->id,
+            'review_comment' => 'Rejected',
+            'reviewed_at' => now(),
+        ]);
+        RequirementProject::factory()->for($rejected)->for($project)->create();
+
+        $updated = $this->service()->update($pending, $requester, [
+            'title' => 'Ordinary update',
+        ]);
+        $resubmitted = $this->service()->update($rejected, $requester, [
+            'title' => 'Requester resubmission',
+        ]);
+
+        $this->assertInstanceOf(RequirementUpdateResult::class, $updated);
+        $this->assertSame('updated', $updated->action);
+        $this->assertSame('Requirement updated.', $updated->message());
+        $this->assertSame($pending->id, $updated->requirement->id);
+        $this->assertInstanceOf(RequirementUpdateResult::class, $resubmitted);
+        $this->assertSame('resubmitted', $resubmitted->action);
+        $this->assertSame('Requirement resubmitted.', $resubmitted->message());
+        $this->assertSame($rejected->id, $resubmitted->requirement->id);
+    }
+
+    public function test_put_response_message_uses_the_locked_workflow_action(): void
+    {
+        $requester = $this->userWithPermission('requester', 'requirement.edit');
+        $reviewer = User::factory()->internal()->create();
+        $project = Project::factory()->create();
+        $pending = Requirement::factory()->create([
+            'submitter_id' => $requester->id,
+            'created_by_id' => $requester->id,
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+        ]);
+        RequirementProject::factory()->for($pending)->for($project)->create();
+        $rejected = Requirement::factory()->create([
+            'submitter_id' => $requester->id,
+            'created_by_id' => $requester->id,
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+            'reviewer_id' => $reviewer->id,
+            'review_comment' => 'Rejected',
+            'reviewed_at' => now(),
+        ]);
+        RequirementProject::factory()->for($rejected)->for($project)->create();
+
+        $this->actingAs($requester)
+            ->putJson("/api/requirements/{$pending->id}", [
+                'title' => 'Ordinary HTTP update',
+            ])->assertOk()
+            ->assertJsonPath('message', 'Requirement updated.');
+
+        $this->actingAs($requester)
+            ->putJson("/api/requirements/{$rejected->id}", [
+                'title' => 'HTTP resubmission',
+            ])->assertOk()
+            ->assertJsonPath('message', 'Requirement resubmitted.');
+    }
+
+    public function test_update_and_resubmit_lock_the_requirement_row_in_the_real_service(): void
+    {
+        $requester = User::factory()->systemUser()->create();
+        $project = Project::factory()->create();
+        $pending = Requirement::factory()->create([
+            'submitter_id' => $requester->id,
+            'created_by_id' => $requester->id,
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+            'title' => 'Before update lock',
+        ]);
+        RequirementProject::factory()->for($pending)->for($project)->create();
+        $rejected = Requirement::factory()->create([
+            'submitter_id' => $requester->id,
+            'created_by_id' => $requester->id,
+            'status' => RequirementStatus::PENDING_REVIEW->value,
+            'reviewer_id' => User::factory()->internal(),
+            'review_comment' => 'Rejected',
+            'reviewed_at' => now(),
+            'title' => 'Before resubmit lock',
+        ]);
+        RequirementProject::factory()->for($rejected)->for($project)->create();
+
+        $queries = [];
+        DB::listen(function ($query) use (&$queries): void {
+            $queries[] = strtolower($query->sql);
+        });
+
+        $this->service()->update($pending, $requester, [
+            'title' => 'After update lock',
+        ]);
+
+        $this->assertTrue(
+            collect($queries)->contains(
+                static fn (string $sql): bool => str_contains(
+                    $sql,
+                    'from "requirements"',
+                ) && str_contains($sql, 'for update'),
+            ),
+            "Requirement update did not acquire a row lock:\n".implode("\n", $queries),
+        );
+
+        $queries = [];
+        $this->service()->resubmit($rejected, $requester, [
+            'title' => 'After resubmit lock',
+        ]);
+
+        $this->assertTrue(
+            collect($queries)->contains(
+                static fn (string $sql): bool => str_contains(
+                    $sql,
+                    'from "requirements"',
+                ) && str_contains($sql, 'for update'),
+            ),
+            "Requirement resubmit did not acquire a row lock:\n".implode("\n", $queries),
+        );
     }
 
     public function test_requirement_row_lock_serializes_revisions_across_pgsql_connections(): void
