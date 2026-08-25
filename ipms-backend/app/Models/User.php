@@ -3,8 +3,12 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
@@ -33,40 +37,40 @@ class User extends Authenticatable
         'date_joined' => 'datetime',
     ];
 
-    public function roles(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    public function roles(): BelongsToMany
     {
         return $this->belongsToMany(Role::class, 'role_user')
             ->withPivot('assigned_by_id', 'assigned_at');
     }
 
-    public function organizations(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    public function organizations(): BelongsToMany
     {
         return $this->belongsToMany(Organization::class, 'organization_user')
             ->withPivot('role_in_org', 'is_primary', 'assigned_at');
     }
 
-    public function projects(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    public function projects(): BelongsToMany
     {
         return $this->belongsToMany(Project::class, 'project_members')
             ->withPivot('role_in_project', 'assigned_at');
     }
 
-    public function assignedTasks(): \Illuminate\Database\Eloquent\Relations\HasMany
+    public function assignedTasks(): HasMany
     {
         return $this->hasMany(Task::class, 'assignee_id');
     }
 
-    public function reportedDefects(): \Illuminate\Database\Eloquent\Relations\HasMany
+    public function reportedDefects(): HasMany
     {
         return $this->hasMany(Defect::class, 'reporter_id');
     }
 
-    public function assignedDefects(): \Illuminate\Database\Eloquent\Relations\HasMany
+    public function assignedDefects(): HasMany
     {
         return $this->hasMany(Defect::class, 'assignee_id');
     }
 
-    public function notificationConfig(): \Illuminate\Database\Eloquent\Relations\HasOne
+    public function notificationConfig(): HasOne
     {
         return $this->hasOne(NotificationConfig::class);
     }
@@ -87,21 +91,34 @@ class User extends Authenticatable
 
     public function getSupplierDescendantOrgIds(): array
     {
-        return cache()->remember("user_{$this->id}_supplier_org_ids", 300, function () {
-            $supplierOrg = $this->organizations()
+        return cache()->remember("user_{$this->id}_supplier_org_ids", 300, function (): array {
+            $supplierOrgIds = $this->organizations()
                 ->where('org_type', 2)
-                ->first();
-            if (!$supplierOrg) return [];
-            return \Illuminate\Support\Facades\DB::table('organizations')
-                ->withRecursiveExpression('org_tree', function ($q) use ($supplierOrg) {
-                    $q->select('id')->from('organizations')->where('id', $supplierOrg->id)
-                        ->unionAll(
-                            \Illuminate\Support\Facades\DB::table('organizations as o')
-                                ->join('org_tree as ot', 'o.parent_id', '=', 'ot.id')
-                                ->select('o.id')
-                        );
-                })
-                ->from('org_tree')->pluck('id')->toArray();
+                ->pluck('organizations.id')
+                ->map(static fn ($id): int => (int) $id)
+                ->all();
+
+            $descendantOrgIds = array_fill_keys($supplierOrgIds, true);
+            $frontier = $supplierOrgIds;
+
+            while ($frontier !== []) {
+                $children = DB::table('organizations')
+                    ->whereIn('parent_id', $frontier)
+                    ->pluck('id')
+                    ->map(static fn ($id): int => (int) $id)
+                    ->all();
+
+                $frontier = array_values(array_filter(
+                    $children,
+                    static fn (int $id): bool => ! isset($descendantOrgIds[$id]),
+                ));
+
+                foreach ($frontier as $id) {
+                    $descendantOrgIds[$id] = true;
+                }
+            }
+
+            return array_keys($descendantOrgIds);
         });
     }
 }

@@ -9,13 +9,20 @@ class PermissionSeeder extends Seeder
 {
     public function run(): void
     {
-        DB::table('permissions')->insert([
+        $permissions = [
             // Project management
             ['code' => 'project.create', 'name' => '创建项目', 'module' => 'project', 'action' => 'create', 'description' => '创建新的业务系统项目'],
             ['code' => 'project.edit', 'name' => '编辑项目', 'module' => 'project', 'action' => 'edit', 'description' => '编辑项目基本信息'],
             ['code' => 'project.delete', 'name' => '删除项目', 'module' => 'project', 'action' => 'delete', 'description' => '删除项目（需通过关联校验）'],
             ['code' => 'project.view', 'name' => '查看项目', 'module' => 'project', 'action' => 'view', 'description' => '查看项目列表和详情'],
             ['code' => 'project.archive', 'name' => '归档项目', 'module' => 'project', 'action' => 'transition', 'description' => '归档/取消归档项目'],
+            // Project version management
+            ['code' => 'project_version.view', 'name' => '查看项目版本', 'module' => 'project_version', 'action' => 'view', 'description' => '查看项目范围内的版本'],
+            ['code' => 'project_version.create', 'name' => '创建项目版本', 'module' => 'project_version', 'action' => 'create', 'description' => '创建项目发布版本'],
+            ['code' => 'project_version.edit', 'name' => '编辑项目版本', 'module' => 'project_version', 'action' => 'edit', 'description' => '编辑或删除草稿版本'],
+            ['code' => 'project_version.transition', 'name' => '流转项目版本', 'module' => 'project_version', 'action' => 'transition', 'description' => '推进项目版本状态'],
+            ['code' => 'project_version.release', 'name' => '发布项目版本', 'module' => 'project_version', 'action' => 'release', 'description' => '执行正常版本发布'],
+            ['code' => 'project_version.override', 'name' => '强制发布项目版本', 'module' => 'project_version', 'action' => 'override', 'description' => '超管例外强制发布'],
             // Requirement management
             ['code' => 'requirement.create', 'name' => '创建需求', 'module' => 'requirement', 'action' => 'create', 'description' => '提交新需求'],
             ['code' => 'requirement.edit', 'name' => '编辑需求', 'module' => 'requirement', 'action' => 'edit', 'description' => '编辑需求字段（触发版本记录）'],
@@ -52,6 +59,12 @@ class PermissionSeeder extends Seeder
             // Audit log
             ['code' => 'audit.view_all', 'name' => '查看全量日志', 'module' => 'audit', 'action' => 'view', 'description' => '查看全量操作日志'],
             ['code' => 'audit.view_scoped', 'name' => '查看范围内日志', 'module' => 'audit', 'action' => 'view', 'description' => '按数据权限范围查看操作日志'],
-        ]);
+        ];
+
+        DB::table('permissions')->upsert(
+            $permissions,
+            ['code'],
+            ['name', 'module', 'action', 'description'],
+        );
     }
 }
