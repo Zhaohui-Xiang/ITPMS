@@ -369,10 +369,11 @@ class ProjectVersionSchemaTest extends TestCase
     {
         $version = ProjectVersion::factory()->create();
         $actor = User::factory()->internal()->create();
+        $assignedAt = now()->startOfSecond();
         $link = RequirementProject::factory()->forVersion($version)->create([
             'delivery_status' => ProjectDeliveryStatus::IN_TESTING,
             'version_assigned_by_id' => $actor->id,
-            'version_assigned_at' => now()->startOfSecond(),
+            'version_assigned_at' => $assignedAt,
         ]);
 
         Task::factory()->create([
@@ -393,6 +394,7 @@ class ProjectVersionSchemaTest extends TestCase
         $this->assertSame($version->id, $link->project_version_id);
         $this->assertSame(ProjectDeliveryStatus::IN_TESTING, $link->delivery_status);
         $this->assertSame($actor->id, $link->version_assigned_by_id);
+        $this->assertTrue($link->version_assigned_at->equalTo($assignedAt));
     }
 
     public function test_version_scope_factories_remain_bound_to_the_target_version(): void
