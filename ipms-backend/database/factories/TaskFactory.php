@@ -19,6 +19,16 @@ class TaskFactory extends Factory
 {
     protected $model = Task::class;
 
+    public function configure(): static
+    {
+        return $this->afterCreating(function (Task $task): void {
+            RequirementProject::query()->firstOrCreate([
+                'requirement_id' => $task->requirement_id,
+                'project_id' => $task->project_id,
+            ]);
+        });
+    }
+
     /**
      * @return array<string, mixed>
      */

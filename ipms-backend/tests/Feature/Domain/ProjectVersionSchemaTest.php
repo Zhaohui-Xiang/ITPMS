@@ -44,9 +44,15 @@ class ProjectVersionSchemaTest extends TestCase
             fn (ProjectVersionStatus $status): array => [$status->value => $status->allowedTransitions()],
         )->all());
 
-        foreach (ProjectVersionStatus::cases() as $status) {
-            $this->assertNotSame('', $status->label());
-        }
+        $this->assertSame([
+            ProjectVersionStatus::DRAFT->value => '草稿',
+            ProjectVersionStatus::PLANNED->value => '已计划',
+            ProjectVersionStatus::IN_DEVELOPMENT->value => '开发中',
+            ProjectVersionStatus::IN_TESTING->value => '测试中',
+            ProjectVersionStatus::READY_TO_RELEASE->value => '待发布',
+            ProjectVersionStatus::RELEASED->value => '已发布',
+            ProjectVersionStatus::ARCHIVED->value => '已归档',
+        ], collect(ProjectVersionStatus::cases())->mapWithKeys(fn (ProjectVersionStatus $status): array => [$status->value => $status->label()])->all());
     }
 
     public function test_project_delivery_statuses_only_move_one_step_forward(): void
@@ -66,6 +72,15 @@ class ProjectVersionSchemaTest extends TestCase
         ], collect(ProjectDeliveryStatus::cases())->mapWithKeys(
             fn (ProjectDeliveryStatus $status): array => [$status->value => $status->allowedForwardTransitions()],
         )->all());
+
+        $this->assertSame([
+            ProjectDeliveryStatus::ASSIGNED->value => '已分配',
+            ProjectDeliveryStatus::IN_DEVELOPMENT->value => '开发中',
+            ProjectDeliveryStatus::IN_TESTING->value => '测试中',
+            ProjectDeliveryStatus::PENDING_DEPLOY->value => '待上线',
+            ProjectDeliveryStatus::DEPLOYED->value => '已上线',
+            ProjectDeliveryStatus::ACCEPTED->value => '已验收',
+        ], collect(ProjectDeliveryStatus::cases())->mapWithKeys(fn (ProjectDeliveryStatus $status): array => [$status->value => $status->label()])->all());
     }
 
     public function test_project_version_code_is_unique_within_project_only(): void
@@ -123,6 +138,18 @@ class ProjectVersionSchemaTest extends TestCase
             ->update(['status' => 8]);
     }
 
+    public function test_project_version_rejects_a_lock_version_below_one(): void
+    {
+        $this->assertSame('pgsql', DB::connection()->getDriverName());
+
+        $version = ProjectVersion::factory()->create();
+
+        $this->expectException(QueryException::class);
+        DB::table('project_versions')
+            ->where('id', $version->id)
+            ->update(['lock_version' => 0]);
+    }
+
     public function test_requirement_project_rejects_an_unknown_delivery_status(): void
     {
         $link = RequirementProject::factory()->create();
@@ -131,6 +158,111 @@ class ProjectVersionSchemaTest extends TestCase
         DB::table('requirement_project')
             ->where('id', $link->id)
             ->update(['delivery_status' => 1]);
+    }
+
+    public function test_history_rejects_an_unknown_from_status(): void
+    {
+        $this->assertSame('pgsql', DB::connection()->getDriverName());
+
+        $version = ProjectVersion::factory()->create();
+        $actor = User::factory()->internal()->create();
+
+        $this->expectException(QueryException::class);
+        DB::table('project_version_histories')->insert([
+            'project_version_id' => $version->id,
+            'event_type' => 'invalid_from_status',
+            'from_status' => 8,
+            'to_status' => ProjectVersionStatus::PLANNED->value,
+            'actor_id' => $actor->id,
+            'metadata' => '{}',
+            'created_at' => now(),
+        ]);
+    }
+
+    public function test_history_rejects_an_unknown_to_status(): void
+    {
+        $this->assertSame('pgsql', DB::connection()->getDriverName());
+
+        $version = ProjectVersion::factory()->create();
+        $actor = User::factory()->internal()->create();
+
+        $this->expectException(QueryException::class);
+        DB::table('project_version_histories')->insert([
+            'project_version_id' => $version->id,
+            'event_type' => 'invalid_to_status',
+            'from_status' => ProjectVersionStatus::DRAFT->value,
+            'to_status' => 8,
+            'actor_id' => $actor->id,
+            'metadata' => '{}',
+            'created_at' => now(),
+        ]);
+    }
+
+    public function test_release_snapshot_rejects_override_reason_without_override(): void
+    {
+        $this->assertSame('pgsql', DB::connection()->getDriverName());
+
+        $version = ProjectVersion::factory()->create();
+        $actor = User::factory()->internal()->create();
+
+        $this->expectException(QueryException::class);
+        DB::table('project_version_release_snapshots')->insert([
+            'project_version_id' => $version->id,
+            'requirement_scope' => '[]',
+            'task_count' => 0,
+            'defect_count' => 0,
+            'gate_result' => '{}',
+            'release_notes' => null,
+            'is_override' => false,
+            'override_reason' => 'not allowed',
+            'released_by_id' => $actor->id,
+            'released_at' => now(),
+        ]);
+    }
+
+    public function test_deleting_a_version_cascades_its_history(): void
+    {
+        $version = ProjectVersion::factory()->create();
+        $actor = User::factory()->internal()->create();
+        $history = ProjectVersionHistory::create([
+            'project_version_id' => $version->id,
+            'event_type' => 'created',
+            'actor_id' => $actor->id,
+            'metadata' => [],
+            'created_at' => now(),
+        ]);
+
+        $version->delete();
+
+        $this->assertDatabaseMissing('project_version_histories', ['id' => $history->id]);
+    }
+
+    public function test_requirement_assignment_restricts_target_version_deletion(): void
+    {
+        $version = ProjectVersion::factory()->create();
+        RequirementProject::factory()->forVersion($version)->create();
+
+        $this->expectException(QueryException::class);
+        $version->delete();
+    }
+
+    public function test_release_snapshot_restricts_target_version_deletion(): void
+    {
+        $version = ProjectVersion::factory()->create();
+        $actor = User::factory()->internal()->create();
+        ProjectVersionReleaseSnapshot::create([
+            'project_version_id' => $version->id,
+            'requirement_scope' => [],
+            'task_count' => 0,
+            'defect_count' => 0,
+            'gate_result' => ['passed' => true],
+            'is_override' => false,
+            'released_by_id' => $actor->id,
+            'released_at' => now(),
+        ]);
+
+        $this->expectException(QueryException::class);
+        $version->delete();
     }
 
     public function test_release_snapshot_is_unique_per_project_version(): void
@@ -216,6 +348,75 @@ class ProjectVersionSchemaTest extends TestCase
         $this->assertSame(['passed' => true], $snapshot->gate_result);
         $this->assertTrue($version->histories->contains($history));
         $this->assertTrue($version->releaseSnapshot->is($snapshot));
+    }
+
+    public function test_default_task_and_defect_factories_create_their_scope_links(): void
+    {
+        $task = Task::factory()->create();
+        $defect = Defect::factory()->create();
+
+        $this->assertDatabaseHas('requirement_project', [
+            'requirement_id' => $task->requirement_id,
+            'project_id' => $task->project_id,
+        ]);
+        $this->assertDatabaseHas('requirement_project', [
+            'requirement_id' => $defect->requirement_id,
+            'project_id' => $defect->project_id,
+        ]);
+    }
+
+    public function test_work_item_factories_reuse_existing_scope_without_overwriting_version_assignment(): void
+    {
+        $version = ProjectVersion::factory()->create();
+        $actor = User::factory()->internal()->create();
+        $link = RequirementProject::factory()->forVersion($version)->create([
+            'delivery_status' => ProjectDeliveryStatus::IN_TESTING,
+            'version_assigned_by_id' => $actor->id,
+            'version_assigned_at' => now()->startOfSecond(),
+        ]);
+
+        Task::factory()->create([
+            'requirement_id' => $link->requirement_id,
+            'project_id' => $link->project_id,
+        ]);
+        Defect::factory()->create([
+            'requirement_id' => $link->requirement_id,
+            'project_id' => $link->project_id,
+        ]);
+
+        $link->refresh();
+
+        $this->assertSame(1, RequirementProject::query()
+            ->where('requirement_id', $link->requirement_id)
+            ->where('project_id', $link->project_id)
+            ->count());
+        $this->assertSame($version->id, $link->project_version_id);
+        $this->assertSame(ProjectDeliveryStatus::IN_TESTING, $link->delivery_status);
+        $this->assertSame($actor->id, $link->version_assigned_by_id);
+    }
+
+    public function test_version_scope_factories_remain_bound_to_the_target_version(): void
+    {
+        $version = ProjectVersion::factory()->create();
+        $link = RequirementProject::factory()->forVersion($version)->create([
+            'delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY,
+        ]);
+
+        $task = Task::factory()->forVersionScope($version)->create();
+        $defect = Defect::factory()->forVersionScope($version)->create();
+
+        $this->assertSame($link->requirement_id, $task->requirement_id);
+        $this->assertSame($link->project_id, $task->project_id);
+        $this->assertSame($link->requirement_id, $defect->requirement_id);
+        $this->assertSame($link->project_id, $defect->project_id);
+
+        $link->refresh();
+        $this->assertSame($version->id, $link->project_version_id);
+        $this->assertSame(ProjectDeliveryStatus::PENDING_DEPLOY, $link->delivery_status);
+        $this->assertSame(1, RequirementProject::query()
+            ->where('requirement_id', $link->requirement_id)
+            ->where('project_id', $link->project_id)
+            ->count());
     }
 
     public function test_factory_helpers_build_a_passing_version_scope(): void

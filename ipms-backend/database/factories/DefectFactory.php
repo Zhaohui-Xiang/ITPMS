@@ -19,6 +19,16 @@ class DefectFactory extends Factory
 {
     protected $model = Defect::class;
 
+    public function configure(): static
+    {
+        return $this->afterCreating(function (Defect $defect): void {
+            RequirementProject::query()->firstOrCreate([
+                'requirement_id' => $defect->requirement_id,
+                'project_id' => $defect->project_id,
+            ]);
+        });
+    }
+
     /**
      * @return array<string, mixed>
      */
