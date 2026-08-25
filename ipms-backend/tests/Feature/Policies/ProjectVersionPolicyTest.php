@@ -273,6 +273,58 @@ class ProjectVersionPolicyTest extends TestCase
         $this->assertFalse($unrelatedRequester->can('view', $version));
     }
 
+    public function test_scoped_participant_view_requires_the_view_permission_code(): void
+    {
+        $manager = $this->userWithRole('it_pm');
+        $participant = $this->userWithRole('it_member');
+        $project = Project::factory()->withManager($manager)->create();
+        $version = ProjectVersion::factory()->for($project)->create();
+
+        DB::table('project_members')->insert([
+            'project_id' => $project->id,
+            'user_id' => $participant->id,
+            'role_in_project' => 'member',
+        ]);
+
+        $roleId = $participant->roles()->sole()->id;
+        $permissionIds = DB::table('permissions')
+            ->where('module', 'project_version')
+            ->pluck('id', 'code');
+
+        DB::table('permission_role')
+            ->where('role_id', $roleId)
+            ->whereIn('permission_id', $permissionIds->values())
+            ->delete();
+        DB::table('permission_role')->insert([
+            'role_id' => $roleId,
+            'permission_id' => $permissionIds['project_version.view'],
+        ]);
+        Cache::flush();
+
+        $this->assertTrue($participant->hasPermission('project_version.view'));
+        $this->assertFalse($participant->hasPermission('project_version.release'));
+        $this->assertTrue($participant->can('view', $version));
+
+        DB::table('permission_role')
+            ->where('role_id', $roleId)
+            ->whereIn('permission_id', $permissionIds->values())
+            ->delete();
+        Cache::flush();
+
+        $this->assertFalse($participant->hasPermission('project_version.view'));
+        $this->assertFalse($participant->can('view', $version));
+
+        DB::table('permission_role')->insert([
+            'role_id' => $roleId,
+            'permission_id' => $permissionIds['project_version.release'],
+        ]);
+        Cache::flush();
+
+        $this->assertTrue($participant->hasPermission('project_version.release'));
+        $this->assertFalse($participant->hasPermission('project_version.view'));
+        $this->assertFalse($participant->can('view', $version));
+    }
+
     public function test_supplier_leaf_membership_can_view_the_entire_supplier_tree_in_one_scope_query(): void
     {
         $manager = $this->userWithRole('it_pm');
