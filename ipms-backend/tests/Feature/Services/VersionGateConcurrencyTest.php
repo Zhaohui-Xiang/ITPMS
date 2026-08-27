@@ -294,6 +294,79 @@ class VersionGateConcurrencyTest extends TestCase
         }
     }
 
+    public function test_direct_scope_update_and_release_return_a_retryable_conflict_without_deadlock(): void
+    {
+        [$release, $mapping] = $this->directMappingReleaseRace('update');
+
+        $this->assertSame('released', $release['result']);
+        $this->assertNoDeadlock($release, $mapping);
+        $this->assertSame('VERSION_LOCKED', $mapping['result']);
+    }
+
+    public function test_direct_scope_delete_and_release_return_a_retryable_conflict_without_deadlock(): void
+    {
+        [$release, $mapping] = $this->directMappingReleaseRace('delete');
+
+        $this->assertSame('released', $release['result']);
+        $this->assertNoDeadlock($release, $mapping);
+        $this->assertSame('VERSION_LOCKED', $mapping['result']);
+    }
+
+    /**
+     * @return array{array<string, mixed>, array<string, mixed>}
+     */
+    private function directMappingReleaseRace(string $operation): array
+    {
+        $admin = User::factory()->withRole('super_admin')->create();
+        $version = ProjectVersion::factory()->inTesting()->create();
+        $link = RequirementProject::factory()->forVersion($version)->create([
+            'delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY,
+        ]);
+        $prefix = sys_get_temp_dir().'/ipms-mapping-release-race-'.bin2hex(random_bytes(8));
+        $scopeLocked = $prefix.'-scope-locked';
+        $mappingPid = $prefix.'-mapping-pid';
+        $proceed = $prefix.'-proceed';
+        $release = new Process([
+            PHP_BINARY,
+            '-r',
+            $this->releaseHoldingScopeScript($version, $link, $admin, $scopeLocked, $proceed),
+        ], base_path());
+        $mapping = new Process([
+            PHP_BINARY,
+            '-r',
+            $this->directMappingScript($link->id, $operation, $mappingPid),
+        ], base_path());
+
+        foreach ([$release, $mapping] as $process) {
+            $process->setTimeout(15);
+        }
+
+        try {
+            $release->start();
+            $this->waitForFile($scopeLocked, $release);
+            $mapping->start();
+            $this->waitForFile($mappingPid, $mapping);
+            $this->waitForAdvisoryWaitOrCompletion((int) file_get_contents($mappingPid), $mapping);
+            touch($proceed);
+            $release->wait();
+            $mapping->wait();
+        } finally {
+            foreach ([$scopeLocked, $mappingPid, $proceed] as $path) {
+                @unlink($path);
+            }
+            foreach ([$release, $mapping] as $process) {
+                if ($process->isRunning()) {
+                    $process->stop();
+                }
+            }
+        }
+
+        $this->assertTrue($release->isSuccessful(), $release->getErrorOutput());
+        $this->assertTrue($mapping->isSuccessful(), $mapping->getErrorOutput());
+
+        return [$this->payload($release), $this->payload($mapping)];
+    }
+
     private function race(int $versionId, string $firstScript, string $secondScript): array
     {
         $barrier = sys_get_temp_dir().'/ipms-gate-race-'.bin2hex(random_bytes(8));
@@ -519,6 +592,83 @@ class VersionGateConcurrencyTest extends TestCase
         $this->assertFileExists($path, $process->getOutput().$process->getErrorOutput());
     }
 
+    private function waitForAdvisoryWaitOrCompletion(int $pid, Process $process): void
+    {
+        $deadline = microtime(true) + 5;
+        while ($process->isRunning() && microtime(true) < $deadline) {
+            $activity = DB::table('pg_stat_activity')
+                ->where('pid', $pid)
+                ->first(['wait_event_type', 'wait_event']);
+
+            if ($activity?->wait_event_type === 'Lock' && $activity?->wait_event === 'advisory') {
+                return;
+            }
+
+            usleep(10_000);
+        }
+
+        if ($process->isRunning()) {
+            $this->fail('Mapping transaction did not reach the advisory lock wait.');
+        }
+    }
+
+    private function releaseHoldingScopeScript(
+        ProjectVersion $version,
+        RequirementProject $link,
+        User $admin,
+        string $scopeLocked,
+        string $proceed,
+    ): string {
+        return sprintf(implode("\n", [
+            'require getcwd()."/vendor/autoload.php";',
+            '$app=require getcwd()."/bootstrap/app.php";',
+            '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();',
+            'Illuminate\\Support\\Facades\\DB::beginTransaction();',
+            'try {',
+            ' app(App\\Services\\VersionGateLock::class)->acquireScope(%d, %d);',
+            ' touch(%s);',
+            ' while (!file_exists(%s)) { usleep(1000); }',
+            ' app(App\\Services\\ProjectReleaseService::class)->release(App\\Models\\ProjectVersion::findOrFail(%d), App\\Models\\User::findOrFail(%d), ["lock_version"=>1,"release_notes"=>"Race","force"=>true,"force_reason"=>"Race"]);',
+            ' Illuminate\\Support\\Facades\\DB::commit();',
+            ' echo json_encode(["result"=>"released"])."\\n";',
+            '} catch (Throwable $e) {',
+            ' if (Illuminate\\Support\\Facades\\DB::transactionLevel() > 0) { Illuminate\\Support\\Facades\\DB::rollBack(); }',
+            ' echo json_encode(["result"=>$e instanceof App\\Exceptions\\DomainConflictException ? $e->errorCode : "db_error","sql_state"=>$e instanceof Illuminate\\Database\\QueryException ? $e->getCode() : null])."\\n";',
+            '}',
+        ]),
+            $link->requirement_id,
+            $link->project_id,
+            var_export($scopeLocked, true),
+            var_export($proceed, true),
+            $version->id,
+            $admin->id,
+        );
+    }
+
+    private function directMappingScript(int $linkId, string $operation, string $pidFile): string
+    {
+        $statement = $operation === 'delete'
+            ? sprintf('Illuminate\\Support\\Facades\\DB::table("requirement_project")->where("id", %d)->delete();', $linkId)
+            : sprintf('Illuminate\\Support\\Facades\\DB::table("requirement_project")->where("id", %d)->update(["project_version_id"=>null]);', $linkId);
+
+        return sprintf(implode("\n", [
+            'require getcwd()."/vendor/autoload.php";',
+            '$app=require getcwd()."/bootstrap/app.php";',
+            '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();',
+            'Illuminate\\Support\\Facades\\DB::beginTransaction();',
+            'try {',
+            ' file_put_contents(%s, (string) Illuminate\\Support\\Facades\\DB::selectOne("SELECT pg_backend_pid() AS pid")->pid);',
+            ' %s',
+            ' Illuminate\\Support\\Facades\\DB::commit();',
+            ' echo json_encode(["result"=>"mapped"])."\\n";',
+            '} catch (Illuminate\\Database\\QueryException $e) {',
+            ' if (Illuminate\\Support\\Facades\\DB::transactionLevel() > 0) { Illuminate\\Support\\Facades\\DB::rollBack(); }',
+            ' $conflict=App\\Services\\VersionGateLock::mutationConflict($e);',
+            ' echo json_encode(["result"=>$conflict?->errorCode ?? "db_error","sql_state"=>$e->getCode()])."\\n";',
+            '}',
+        ]), var_export($pidFile, true), $statement);
+    }
+
     private function waitScript(string $barrier): string
     {
         return sprintf(implode("\n", [
@@ -599,7 +749,11 @@ class VersionGateConcurrencyTest extends TestCase
     private function assertNoDeadlock(array ...$payloads): void
     {
         foreach ($payloads as $payload) {
-            $this->assertNotSame('40P01', $payload['sql_state'] ?? null);
+            $this->assertNotSame(
+                '40P01',
+                $payload['sql_state'] ?? null,
+                json_encode($payload, JSON_THROW_ON_ERROR),
+            );
         }
     }
 }

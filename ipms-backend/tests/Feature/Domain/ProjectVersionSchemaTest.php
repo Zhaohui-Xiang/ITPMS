@@ -250,7 +250,7 @@ class ProjectVersionSchemaTest extends TestCase
     public function test_release_snapshot_restricts_target_version_deletion(): void
     {
         [$version, $actor, $releasedAt] = $this->releasedVersionForSnapshot();
-        ProjectVersionReleaseSnapshot::createForRelease([
+        $this->insertReleaseSnapshot([
             'project_version_id' => $version->id,
             'requirement_scope' => [],
             'task_count' => 0,
@@ -280,10 +280,10 @@ class ProjectVersionSchemaTest extends TestCase
             'released_at' => $releasedAt,
         ];
 
-        ProjectVersionReleaseSnapshot::createForRelease($attributes);
+        $this->insertReleaseSnapshot($attributes);
 
         $this->expectException(QueryException::class);
-        ProjectVersionReleaseSnapshot::createForRelease($attributes);
+        $this->insertReleaseSnapshot($attributes);
     }
 
     public function test_project_and_requirement_relations_expose_delivery_pivot_data(): void
@@ -327,7 +327,7 @@ class ProjectVersionSchemaTest extends TestCase
             'metadata' => ['source' => 'test'],
             'created_at' => now(),
         ]);
-        $snapshot = ProjectVersionReleaseSnapshot::createForRelease([
+        $snapshot = $this->insertReleaseSnapshot([
             'project_version_id' => $version->id,
             'requirement_scope' => [['requirement_id' => 1]],
             'task_count' => 1,
@@ -456,6 +456,20 @@ class ProjectVersionSchemaTest extends TestCase
         $managedProject = Project::factory()->withManager($manager)->create();
         $this->assertTrue($managedProject->manager->is($manager));
         $this->assertSame($manager->id, $managedProject->created_by_id);
+    }
+
+    /**
+     * @param  array<string, mixed>  $attributes
+     */
+    private function insertReleaseSnapshot(array $attributes): ProjectVersionReleaseSnapshot
+    {
+        $id = DB::table('project_version_release_snapshots')->insertGetId([
+            ...$attributes,
+            'requirement_scope' => json_encode($attributes['requirement_scope'], JSON_THROW_ON_ERROR),
+            'gate_result' => json_encode($attributes['gate_result'], JSON_THROW_ON_ERROR),
+        ]);
+
+        return ProjectVersionReleaseSnapshot::query()->findOrFail($id);
     }
 
     /**

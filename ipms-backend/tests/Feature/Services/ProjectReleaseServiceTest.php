@@ -587,6 +587,43 @@ class ProjectReleaseServiceTest extends TestCase
         $this->assertUntouched($version);
     }
 
+    public function test_public_snapshot_helper_cannot_authorize_arbitrary_creation(): void
+    {
+        $actor = User::factory()->internal()->create();
+        $version = ProjectVersion::factory()->create();
+        $releasedAt = now();
+        DB::table('project_versions')->where('id', $version->id)->update([
+            'status' => ProjectVersionStatus::RELEASED->value,
+            'release_notes' => 'Persisted notes',
+            'released_by_id' => $actor->id,
+            'released_at' => $releasedAt,
+        ]);
+        $attributes = [
+            'project_version_id' => $version->id,
+            'requirement_scope' => [['forged' => true]],
+            'task_count' => 999,
+            'defect_count' => 999,
+            'gate_result' => ['passed' => true, 'forged' => true],
+            'release_notes' => 'Persisted notes',
+            'is_override' => false,
+            'override_reason' => null,
+            'released_by_id' => $actor->id,
+            'released_at' => $releasedAt,
+        ];
+
+        if (method_exists(ProjectVersionReleaseSnapshot::class, 'createForRelease')) {
+            ProjectVersionReleaseSnapshot::createForRelease($attributes);
+        }
+
+        $this->assertFalse(
+            method_exists(ProjectVersionReleaseSnapshot::class, 'createForRelease'),
+            'A non-release caller used the public helper to create an arbitrary snapshot.',
+        );
+        $this->assertDatabaseMissing('project_version_release_snapshots', [
+            'project_version_id' => $version->id,
+        ]);
+    }
+
     public function test_snapshot_database_rows_are_immutable_and_direct_model_create_is_forbidden(): void
     {
         [$manager, $project] = $this->managedProject();

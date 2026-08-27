@@ -34,6 +34,8 @@ final class ProjectReleaseService
 
     private const MAX_SCOPE_RETRIES = 5;
 
+    private static int $snapshotCreationDepth = 0;
+
     public function __construct(
         private readonly ReleaseGateService $releaseGateService,
         private readonly ProjectVersionPolicy $policy,
@@ -61,6 +63,11 @@ final class ProjectReleaseService
         }
 
         throw new RuntimeException('Unreachable project release retry state.');
+    }
+
+    public static function isSnapshotCreationAuthorized(): bool
+    {
+        return self::$snapshotCreationDepth > 0;
     }
 
     private function releaseLocked(
@@ -192,7 +199,7 @@ final class ProjectReleaseService
         $locked->lock_version++;
         $locked->save();
 
-        $snapshot = ProjectVersionReleaseSnapshot::createForRelease([
+        $snapshot = $this->createSnapshot([
             'project_version_id' => $locked->id,
             'requirement_scope' => $links->map(static fn (RequirementProject $link): array => [
                 'requirement_project_id' => $link->id,
@@ -255,6 +262,23 @@ final class ProjectReleaseService
         DB::afterCommit(static fn (): mixed => event($event));
 
         return $locked->fresh();
+    }
+
+    /**
+     * @param  array<string, mixed>  $attributes
+     */
+    private function createSnapshot(array $attributes): ProjectVersionReleaseSnapshot
+    {
+        self::$snapshotCreationDepth++;
+
+        try {
+            /** @var ProjectVersionReleaseSnapshot $snapshot */
+            $snapshot = ProjectVersionReleaseSnapshot::query()->create($attributes);
+
+            return $snapshot;
+        } finally {
+            self::$snapshotCreationDepth--;
+        }
     }
 
     private function assertNormalActor(ProjectVersion $version, User $actor): void

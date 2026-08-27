@@ -142,15 +142,36 @@ return new class extends Migration
                       AND project_id IS NOT NULL
                     ORDER BY requirement_id, project_id
                 LOOP
-                    PERFORM pg_advisory_xact_lock(
-                        hashtextextended(
-                            'itpms:requirement-project:'
-                                || scope_row.requirement_id::text
-                                || ':'
-                                || scope_row.project_id::text,
-                            0
-                        )
-                    );
+                    IF TG_OP IN ('UPDATE', 'DELETE') THEN
+                        IF NOT pg_try_advisory_xact_lock(
+                            hashtextextended(
+                                'itpms:requirement-project:'
+                                    || scope_row.requirement_id::text
+                                    || ':'
+                                    || scope_row.project_id::text,
+                                0
+                            )
+                        ) THEN
+                            RAISE EXCEPTION USING
+                                ERRCODE = 'IV001',
+                                MESSAGE = 'REQUIREMENT_SCOPE_MAPPING_BUSY',
+                                DETAIL = format(
+                                    'requirement_id=%s,project_id=%s',
+                                    scope_row.requirement_id,
+                                    scope_row.project_id
+                                );
+                        END IF;
+                    ELSE
+                        PERFORM pg_advisory_xact_lock(
+                            hashtextextended(
+                                'itpms:requirement-project:'
+                                    || scope_row.requirement_id::text
+                                    || ':'
+                                    || scope_row.project_id::text,
+                                0
+                            )
+                        );
+                    END IF;
                 END LOOP;
 
                 FOR version_id IN

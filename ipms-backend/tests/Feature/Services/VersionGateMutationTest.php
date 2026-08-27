@@ -147,6 +147,10 @@ class VersionGateMutationTest extends TestCase
             $conflict = VersionGateLock::mutationConflict($exception);
             $this->assertNotNull($conflict);
             $this->assertSame('VERSION_LOCKED', $conflict->errorCode);
+            $this->assertSame(
+                'The project version no longer accepts requirement scope mapping, task, or defect mutations.',
+                $conflict->getMessage(),
+            );
             $this->assertSame([
                 'project_version_id' => [$version->id],
                 'status' => ['current' => ProjectVersionStatus::READY_TO_RELEASE->value],

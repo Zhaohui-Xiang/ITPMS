@@ -95,7 +95,7 @@ final class VersionGateLock
                 'project_version_id' => $versionId === null ? [] : [$versionId],
                 'status' => ['current' => $status],
             ],
-            message: 'The project version no longer accepts task or defect mutations.',
+            message: 'The project version no longer accepts requirement scope mapping, task, or defect mutations.',
         );
     }
 
