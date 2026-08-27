@@ -21,6 +21,7 @@ use App\Services\ProjectVersionService;
 use App\Services\ReleaseGateService;
 use App\ValueObjects\ReleaseGateResult;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
+use Illuminate\Support\Facades\DB;
 use JsonSerializable;
 use Tests\TestCase;
 
@@ -390,12 +391,16 @@ class ReleaseGateServiceTest extends TestCase
     {
         $actor = User::factory()->internal()->create();
         $released = ProjectVersion::factory()->create([
-            'status' => ProjectVersionStatus::RELEASED->value,
+            'status' => ProjectVersionStatus::IN_TESTING->value,
             'lock_version' => 3,
         ]);
         RequirementProject::factory()->forVersion($released)->create([
             'delivery_status' => ProjectDeliveryStatus::DEPLOYED->value,
         ]);
+        DB::table('project_versions')->where('id', $released->id)->update([
+            'status' => ProjectVersionStatus::RELEASED->value,
+        ]);
+        $released->refresh();
 
         try {
             app(ProjectVersionService::class)->transition(

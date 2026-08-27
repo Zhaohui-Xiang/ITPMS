@@ -92,8 +92,7 @@ final class ProjectVersionService
             $actor,
             $reason,
         ): ProjectVersion {
-            $this->versionGateLock->acquire($version->id);
-            $locked = $this->lockVersion($version->id);
+            [$locked] = $this->lockVersionGateScope($version->id);
             $this->assertExpectedLock($locked, $expectedLock);
 
             if ($target === ProjectVersionStatus::RELEASED) {
@@ -322,6 +321,61 @@ final class ProjectVersionService
         });
     }
 
+    /**
+     * Global release-workflow lock order: stable requirement-project scopes,
+     * project-version advisory locks, requirement_project rows, version rows,
+     * then requirement rows.
+     *
+     * @return array{ProjectVersion, Collection<int, RequirementProject>}
+     */
+    private function lockVersionGateScope(int $versionId): array
+    {
+        $initialLinks = RequirementProject::query()
+            ->where('project_version_id', $versionId)
+            ->orderBy('id')
+            ->get(['id', 'requirement_id', 'project_id']);
+
+        $this->versionGateLock->acquireScopes(
+            $initialLinks->map(static fn (RequirementProject $link): array => [
+                'requirement_id' => $link->requirement_id,
+                'project_id' => $link->project_id,
+            ]),
+        );
+        $this->versionGateLock->acquire($versionId);
+
+        $links = RequirementProject::query()
+            ->whereKey($initialLinks->pluck('id')->all())
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get();
+        $locked = $this->lockVersion($versionId);
+        $liveLinks = RequirementProject::query()
+            ->where('project_version_id', $versionId)
+            ->orderBy('id')
+            ->get(['id', 'requirement_id', 'project_id']);
+
+        $initialScope = $initialLinks->map(static fn (RequirementProject $link): array => [
+            'id' => $link->id,
+            'requirement_id' => $link->requirement_id,
+            'project_id' => $link->project_id,
+        ])->values()->all();
+        $liveScope = $liveLinks->map(static fn (RequirementProject $link): array => [
+            'id' => $link->id,
+            'requirement_id' => $link->requirement_id,
+            'project_id' => $link->project_id,
+        ])->values()->all();
+
+        if ($initialScope !== $liveScope) {
+            throw new DomainConflictException(
+                'VERSION_SCOPE_CHANGED',
+                errors: ['project_version_id' => [$versionId]],
+                message: 'The version scope changed. Reload and try again.',
+            );
+        }
+
+        return [$locked, $links];
+    }
+
     private function lockVersion(int $id): ProjectVersion
     {
         return ProjectVersion::query()->whereKey($id)->lockForUpdate()->firstOrFail();
@@ -358,6 +412,10 @@ final class ProjectVersionService
         ProjectVersion $version,
         RequirementProject $link,
     ): array {
+        $this->versionGateLock->acquireScope(
+            $link->requirement_id,
+            $link->project_id,
+        );
         $initialVersionId = RequirementProject::query()
             ->whereKey($link->getKey())
             ->value('project_version_id');
@@ -368,17 +426,16 @@ final class ProjectVersionService
             ->sort()
             ->values();
 
-        foreach ($versionIds as $versionId) {
-            $this->versionGateLock->acquire($versionId);
-        }
-
+        $this->versionGateLock->acquireVersions($versionIds);
         $lockedLink = RequirementProject::query()
             ->whereKey($link->getKey())
             ->orderBy('id')
             ->lockForUpdate()
             ->firstOrFail();
 
-        if ($lockedLink->project_version_id !== $initialVersionId) {
+        if ($lockedLink->requirement_id !== $link->requirement_id
+            || $lockedLink->project_id !== $link->project_id
+            || $lockedLink->project_version_id !== $initialVersionId) {
             throw new DomainConflictException(
                 'VERSION_SCOPE_CHANGED',
                 errors: ['requirement_project_id' => [$lockedLink->id]],

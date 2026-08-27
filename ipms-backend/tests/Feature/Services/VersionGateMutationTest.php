@@ -129,13 +129,76 @@ class VersionGateMutationTest extends TestCase
         $this->assertDatabaseMissing('tasks', ['title' => 'Late blocker']);
     }
 
+    public function test_ready_version_rejects_direct_requirement_scope_assignment(): void
+    {
+        $version = ProjectVersion::factory()->ready()->withPassingScope()->create();
+        $link = RequirementProject::factory()->create([
+            'project_id' => $version->project_id,
+            'project_version_id' => null,
+        ]);
+
+        try {
+            DB::table('requirement_project')->where('id', $link->id)->update([
+                'project_version_id' => $version->id,
+            ]);
+            $this->fail('Expected direct scope assignment to be rejected.');
+        } catch (QueryException $exception) {
+            $this->assertSame('IV001', $exception->getCode());
+            $conflict = VersionGateLock::mutationConflict($exception);
+            $this->assertNotNull($conflict);
+            $this->assertSame('VERSION_LOCKED', $conflict->errorCode);
+            $this->assertSame([
+                'project_version_id' => [$version->id],
+                'status' => ['current' => ProjectVersionStatus::READY_TO_RELEASE->value],
+            ], $conflict->errors);
+        }
+
+        $this->assertNull($link->fresh()->project_version_id);
+    }
+
+    public function test_snapshot_insert_requires_matching_released_version_metadata(): void
+    {
+        $manager = User::factory()->internal()->create();
+        $version = ProjectVersion::factory()->create([
+            'release_notes' => 'Original',
+        ]);
+
+        try {
+            DB::table('project_version_release_snapshots')->insert([
+                'project_version_id' => $version->id,
+                'requirement_scope' => '[]',
+                'task_count' => 0,
+                'defect_count' => 0,
+                'gate_result' => '{}',
+                'release_notes' => 'Original',
+                'is_override' => false,
+                'override_reason' => null,
+                'released_by_id' => $manager->id,
+                'released_at' => now(),
+            ]);
+            $this->fail('Expected a draft version snapshot to be rejected.');
+        } catch (QueryException $exception) {
+            $this->assertSame('IV003', $exception->getCode());
+        }
+
+        $this->assertDatabaseMissing('project_version_release_snapshots', [
+            'project_version_id' => $version->id,
+        ]);
+    }
+
     public function test_snapshot_database_trigger_rolls_back_and_reapplies_cleanly(): void
     {
         $migration = require database_path(
             'migrations/2026_08_25_000031_serialize_release_gate_mutations.php',
         );
         $manager = User::factory()->internal()->create();
-        $version = ProjectVersion::factory()->create();
+        $releasedAt = now();
+        $version = ProjectVersion::factory()->create([
+            'status' => ProjectVersionStatus::RELEASED,
+            'release_notes' => 'Original',
+            'released_by_id' => $manager->id,
+            'released_at' => $releasedAt,
+        ]);
         $snapshotId = DB::table('project_version_release_snapshots')->insertGetId([
             'project_version_id' => $version->id,
             'requirement_scope' => '[]',
@@ -146,7 +209,7 @@ class VersionGateMutationTest extends TestCase
             'is_override' => false,
             'override_reason' => null,
             'released_by_id' => $manager->id,
-            'released_at' => now(),
+            'released_at' => $releasedAt,
         ]);
 
         try {

@@ -66,7 +66,10 @@ class RequirementWorkflowService
         array $data,
     ): RequirementUpdateResult {
         return DB::transaction(function () use ($requirement, $actor, $data): RequirementUpdateResult {
-            [$locked, $links, $versions] = $this->lockRequirementScope($requirement);
+            [$locked, $links, $versions] = $this->lockRequirementScope(
+                $requirement,
+                $data['project_ids'] ?? [],
+            );
 
             if ($locked->isRejectedForResubmission()) {
                 return RequirementUpdateResult::resubmitted(
@@ -191,7 +194,10 @@ class RequirementWorkflowService
         array $data,
     ): Requirement {
         return DB::transaction(function () use ($requirement, $requester, $data): Requirement {
-            [$locked, $links, $versions] = $this->lockRequirementScope($requirement);
+            [$locked, $links, $versions] = $this->lockRequirementScope(
+                $requirement,
+                $data['project_ids'] ?? [],
+            );
 
             return $this->resubmitLocked($locked, $requester, $data, $links, $versions);
         });
@@ -217,6 +223,7 @@ class RequirementWorkflowService
         return DB::transaction(function () use ($requirement, $projectId, $targetStatus, $actor): RequirementProject {
             [$lockedRequirement, $links, $versions] = $this->lockRequirementScope(
                 $requirement,
+                [$projectId],
             );
 
             if ($lockedRequirement->status === RequirementStatus::PENDING_REVIEW->value) {
@@ -431,74 +438,118 @@ class RequirementWorkflowService
     }
 
     /**
-     * Lock order: version gate advisory locks, requirement_project rows,
-     * project_versions rows, then the requirement row.
+     * Global release-workflow lock order: stable requirement-project scopes,
+     * project-version advisory locks, requirement_project rows, version rows,
+     * then the requirement row.
      *
+     * @param  list<int>  $additionalProjectIds
      * @return array{Requirement, Collection<int, RequirementProject>, Collection<int, ProjectVersion>}
      */
-    private function lockRequirementScope(Requirement $requirement): array
-    {
+    private function lockRequirementScope(
+        Requirement $requirement,
+        array $additionalProjectIds = [],
+    ): array {
         $initialLinks = RequirementProject::query()
             ->where('requirement_id', $requirement->getKey())
             ->orderBy('id')
-            ->get(['id', 'project_version_id']);
-        $initialLinkIds = $initialLinks->pluck('id')
-            ->map(static fn (mixed $id): int => (int) $id)
-            ->all();
-        $initialVersionIds = $initialLinks->pluck('project_version_id')
+            ->get(['id', 'requirement_id', 'project_id', 'project_version_id']);
+        $scopes = $initialLinks->map(static fn (RequirementProject $link): array => [
+            'requirement_id' => $link->requirement_id,
+            'project_id' => $link->project_id,
+        ])->concat(
+            collect($additionalProjectIds)->map(
+                static fn (mixed $projectId): array => [
+                    'requirement_id' => (int) $requirement->getKey(),
+                    'project_id' => (int) $projectId,
+                ],
+            ),
+        );
+
+        $this->versionGateLock->acquireScopes($scopes);
+
+        $scopedLinks = RequirementProject::query()
+            ->where('requirement_id', $requirement->getKey())
+            ->orderBy('id')
+            ->get(['id', 'requirement_id', 'project_id', 'project_version_id']);
+        $initialIdentity = $initialLinks->map(static fn (RequirementProject $link): array => [
+            'id' => $link->id,
+            'requirement_id' => $link->requirement_id,
+            'project_id' => $link->project_id,
+        ])->values()->all();
+        $scopedIdentity = $scopedLinks->map(static fn (RequirementProject $link): array => [
+            'id' => $link->id,
+            'requirement_id' => $link->requirement_id,
+            'project_id' => $link->project_id,
+        ])->values()->all();
+
+        if ($initialIdentity !== $scopedIdentity) {
+            $this->throwRequirementScopeChanged((int) $requirement->getKey());
+        }
+
+        $versionIds = $scopedLinks->pluck('project_version_id')
             ->filter()
             ->map(static fn (mixed $id): int => (int) $id)
             ->unique()
             ->sort()
             ->values();
-
-        foreach ($initialVersionIds as $versionId) {
-            $this->versionGateLock->acquire($versionId);
-        }
+        $this->versionGateLock->acquireVersions($versionIds);
 
         $links = RequirementProject::query()
-            ->whereKey($initialLinkIds)
+            ->whereKey($scopedLinks->pluck('id')->all())
             ->orderBy('id')
             ->lockForUpdate()
             ->get();
-        $lockedVersionIds = $links->pluck('project_version_id')
-            ->filter()
-            ->map(static fn (mixed $id): int => (int) $id)
-            ->unique()
-            ->sort()
-            ->values();
+        $lockedMappings = $links->map(static fn (RequirementProject $link): array => [
+            'id' => $link->id,
+            'project_version_id' => $link->project_version_id,
+        ])->values()->all();
+        $scopedMappings = $scopedLinks->map(static fn (RequirementProject $link): array => [
+            'id' => $link->id,
+            'project_version_id' => $link->project_version_id,
+        ])->values()->all();
 
-        if ($lockedVersionIds->values()->all() !== $initialVersionIds->values()->all()) {
-            throw new DomainConflictException(
-                'REQUIREMENT_SCOPE_CHANGED',
-                errors: ['requirement_id' => [$requirement->getKey()]],
-                message: 'The requirement scope changed. Reload and try again.',
-            );
+        if ($lockedMappings !== $scopedMappings) {
+            $this->throwRequirementScopeChanged((int) $requirement->getKey());
         }
 
         $versions = ProjectVersion::query()
-            ->whereKey($lockedVersionIds->all())
+            ->whereKey($versionIds->all())
             ->orderBy('id')
             ->lockForUpdate()
             ->get()
             ->keyBy('id');
         $locked = $this->lockRequirement($requirement);
-        $liveLinkIds = RequirementProject::query()
+        $liveLinks = RequirementProject::query()
             ->where('requirement_id', $locked->id)
             ->orderBy('id')
-            ->pluck('id')
-            ->map(static fn (mixed $id): int => (int) $id)
-            ->all();
+            ->get(['id', 'requirement_id', 'project_id', 'project_version_id']);
+        $liveScope = $liveLinks->map(static fn (RequirementProject $link): array => [
+            'id' => $link->id,
+            'requirement_id' => $link->requirement_id,
+            'project_id' => $link->project_id,
+            'project_version_id' => $link->project_version_id,
+        ])->values()->all();
+        $lockedScope = $links->map(static fn (RequirementProject $link): array => [
+            'id' => $link->id,
+            'requirement_id' => $link->requirement_id,
+            'project_id' => $link->project_id,
+            'project_version_id' => $link->project_version_id,
+        ])->values()->all();
 
-        if ($liveLinkIds !== $initialLinkIds) {
-            throw new DomainConflictException(
-                'REQUIREMENT_SCOPE_CHANGED',
-                errors: ['requirement_id' => [$locked->id]],
-                message: 'The requirement scope changed. Reload and try again.',
-            );
+        if ($liveScope !== $lockedScope) {
+            $this->throwRequirementScopeChanged($locked->id);
         }
 
         return [$locked, $links, $versions];
+    }
+
+    private function throwRequirementScopeChanged(int $requirementId): never
+    {
+        throw new DomainConflictException(
+            'REQUIREMENT_SCOPE_CHANGED',
+            errors: ['requirement_id' => [$requirementId]],
+            message: 'The requirement scope changed. Reload and try again.',
+        );
     }
 
     private function lockRequirement(Requirement $requirement): Requirement

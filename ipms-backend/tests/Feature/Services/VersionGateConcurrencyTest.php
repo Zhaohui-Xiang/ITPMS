@@ -2,12 +2,14 @@
 
 namespace Tests\Feature\Services;
 
+use App\Enums\DefectSeverity;
 use App\Enums\DefectStatus;
 use App\Enums\ProjectDeliveryStatus;
 use App\Enums\ProjectVersionStatus;
 use App\Enums\RequirementStatus;
 use App\Enums\TaskStatus;
 use App\Models\AuditLog;
+use App\Models\Defect;
 use App\Models\Project;
 use App\Models\ProjectVersion;
 use App\Models\ProjectVersionHistory;
@@ -93,6 +95,105 @@ class VersionGateConcurrencyTest extends TestCase
             && $defect->fresh()->status === DefectStatus::REOPENED->value,
         );
         $this->assertNoDeadlock($release, $mutation);
+    }
+
+    public function test_move_task_and_ready_gate_serialize_on_stable_requirement_project_scope(): void
+    {
+        $actor = User::factory()->internal()->create();
+        $project = Project::factory()->create();
+        $source = ProjectVersion::factory()->for($project)->create();
+        $target = ProjectVersion::factory()->for($project)->inTesting()->withPassingScope()->create([
+            'release_notes' => 'Ready',
+        ]);
+        $link = RequirementProject::factory()->forVersion($source)->create([
+            'delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY,
+        ]);
+
+        [$planning, $mutation, $gate] = $this->stableScopeRace(
+            $link,
+            $source,
+            $target,
+            $this->taskInsertForLinkScript($link->id),
+            $this->transitionAfterPlanningScript($target->id, $actor->id),
+            $actor,
+        );
+
+        $target->refresh();
+        if ($gate['result'] === 'ready') {
+            $this->assertSame('VERSION_LOCKED', $mutation['result']);
+            $this->assertSame(0, Task::query()
+                ->where('requirement_id', $link->requirement_id)
+                ->where('project_id', $project->id)
+                ->where('status', TaskStatus::TODO)
+                ->count());
+        } else {
+            $this->assertSame('RELEASE_GATE_FAILED', $gate['result']);
+            $this->assertSame('mutated', $mutation['result']);
+            $this->assertSame(ProjectVersionStatus::IN_TESTING, $target->status);
+        }
+
+        $this->assertSame('planned', $planning['result']);
+        $this->assertFalse(
+            $target->status === ProjectVersionStatus::READY_TO_RELEASE
+            && Task::query()
+                ->where('requirement_id', $link->requirement_id)
+                ->where('project_id', $project->id)
+                ->where('status', TaskStatus::TODO)
+                ->exists(),
+        );
+        $this->assertNoDeadlock($planning, $mutation, $gate);
+    }
+
+    public function test_plan_defect_and_release_serialize_on_stable_requirement_project_scope(): void
+    {
+        $manager = User::factory()->withRole('it_pm')->create();
+        $project = Project::factory()->withManager($manager)->create();
+        $target = ProjectVersion::factory()->for($project)->inTesting()->withPassingScope()->create([
+            'release_notes' => 'Ready',
+        ]);
+        $link = $target->requirementLinks()->firstOrFail();
+        DB::table('requirement_project')->where('id', $link->id)->update([
+            'project_version_id' => null,
+            'version_assigned_by_id' => null,
+            'version_assigned_at' => null,
+        ]);
+        $link->refresh();
+
+        [$planning, $mutation, $gate] = $this->stableScopeRace(
+            $link,
+            null,
+            $target,
+            $this->defectInsertForLinkScript($link->id),
+            $this->releaseAfterPlanningScript($target->id, $manager->id),
+            $manager,
+        );
+
+        $target->refresh();
+        if ($gate['result'] === 'released') {
+            $this->assertSame('VERSION_LOCKED', $mutation['result']);
+            $this->assertSame(0, Defect::query()
+                ->where('requirement_id', $link->requirement_id)
+                ->where('project_id', $project->id)
+                ->where('severity', DefectSeverity::SERIOUS)
+                ->where('status', '!=', DefectStatus::CLOSED)
+                ->count());
+        } else {
+            $this->assertSame('RELEASE_GATE_FAILED', $gate['result']);
+            $this->assertSame('mutated', $mutation['result']);
+            $this->assertNotSame(ProjectVersionStatus::RELEASED, $target->status);
+        }
+
+        $this->assertSame('planned', $planning['result']);
+        $this->assertFalse(
+            $target->status === ProjectVersionStatus::RELEASED
+            && Defect::query()
+                ->where('requirement_id', $link->requirement_id)
+                ->where('project_id', $project->id)
+                ->where('severity', DefectSeverity::SERIOUS)
+                ->where('status', '!=', DefectStatus::CLOSED)
+                ->exists(),
+        );
+        $this->assertNoDeadlock($planning, $mutation, $gate);
     }
 
     public function test_release_and_delivery_transition_share_lock_order_without_deadlock(): void
@@ -229,6 +330,193 @@ class VersionGateConcurrencyTest extends TestCase
         $this->assertTrue($second->isSuccessful(), $second->getErrorOutput());
 
         return [$this->payload($first), $this->payload($second)];
+    }
+
+    /**
+     * @return array{array<string, mixed>, array<string, mixed>, array<string, mixed>}
+     */
+    private function stableScopeRace(
+        RequirementProject $link,
+        ?ProjectVersion $source,
+        ProjectVersion $target,
+        string $mutationScript,
+        string $gateScript,
+        User $actor,
+    ): array {
+        $prefix = sys_get_temp_dir().'/ipms-stable-scope-race-'.bin2hex(random_bytes(8));
+        $locked = $prefix.'-locked';
+        $proceed = $prefix.'-proceed';
+        $planned = $prefix.'-planned';
+
+        $planning = new Process([
+            PHP_BINARY,
+            '-r',
+            $this->planningScript($link, $source, $target, $actor, $locked, $proceed, $planned),
+        ], base_path());
+        $mutation = new Process([
+            PHP_BINARY,
+            '-r',
+            $this->waitScript($locked).$mutationScript,
+        ], base_path());
+        $gate = new Process([
+            PHP_BINARY,
+            '-r',
+            $this->waitScript($planned).$gateScript,
+        ], base_path());
+
+        foreach ([$planning, $mutation, $gate] as $process) {
+            $process->setTimeout(20);
+        }
+
+        try {
+            $planning->start();
+            $this->waitForFile($locked, $planning);
+            $mutation->start();
+            $gate->start();
+            usleep(1_500_000);
+            touch($proceed);
+
+            foreach ([$planning, $mutation, $gate] as $process) {
+                $process->wait();
+            }
+        } finally {
+            foreach ([$locked, $proceed, $planned] as $path) {
+                @unlink($path);
+            }
+            foreach ([$planning, $mutation, $gate] as $process) {
+                if ($process->isRunning()) {
+                    $process->stop();
+                }
+            }
+        }
+
+        foreach ([$planning, $mutation, $gate] as $process) {
+            $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
+        }
+
+        return [
+            $this->payload($planning),
+            $this->payload($mutation),
+            $this->payload($gate),
+        ];
+    }
+
+    private function planningScript(
+        RequirementProject $link,
+        ?ProjectVersion $source,
+        ProjectVersion $target,
+        User $actor,
+        string $locked,
+        string $proceed,
+        string $planned,
+    ): string {
+        $sourceLock = $source === null
+            ? ''
+            : sprintf('app(App\\Services\\VersionGateLock::class)->acquire(%d);', $source->id);
+
+        return sprintf(implode("\n", [
+            'require getcwd()."/vendor/autoload.php";',
+            '$app=require getcwd()."/bootstrap/app.php";',
+            '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();',
+            'Illuminate\\Support\\Facades\\DB::beginTransaction();',
+            'try {',
+            ' Illuminate\\Support\\Facades\\DB::select("SELECT pg_advisory_xact_lock(hashtextextended(\'itpms:requirement-project:\' || ?::text || \':\' || ?::text, 0))", [%d, %d]);',
+            ' %s',
+            ' touch(%s);',
+            ' while (!file_exists(%s)) { usleep(1000); }',
+            ' app(App\\Services\\ProjectVersionService::class)->assignRequirement(App\\Models\\ProjectVersion::findOrFail(%d), App\\Models\\RequirementProject::findOrFail(%d), 1, App\\Models\\User::findOrFail(%d), "Race planning");',
+            ' Illuminate\\Support\\Facades\\DB::commit();',
+            ' touch(%s);',
+            ' echo json_encode(["result"=>"planned"])."\\n";',
+            '} catch (Throwable $e) {',
+            ' if (Illuminate\\Support\\Facades\\DB::transactionLevel() > 0) { Illuminate\\Support\\Facades\\DB::rollBack(); }',
+            ' echo json_encode(["result"=>$e instanceof App\\Exceptions\\DomainConflictException ? $e->errorCode : "error","sql_state"=>$e instanceof Illuminate\\Database\\QueryException ? $e->getCode() : null])."\\n";',
+            '}',
+        ]),
+            $link->requirement_id,
+            $link->project_id,
+            $sourceLock,
+            var_export($locked, true),
+            var_export($proceed, true),
+            $target->id,
+            $link->id,
+            $actor->id,
+            var_export($planned, true),
+        );
+    }
+
+    private function taskInsertForLinkScript(int $linkId): string
+    {
+        return sprintf(implode("\n", [
+            'Illuminate\\Support\\Facades\\DB::beginTransaction();',
+            'try {',
+            ' $link=App\\Models\\RequirementProject::findOrFail(%d);',
+            ' App\\Models\\Task::factory()->create(["requirement_id"=>$link->requirement_id,"project_id"=>$link->project_id,"status"=>App\\Enums\\TaskStatus::TODO]);',
+            ' usleep(4000000);',
+            ' Illuminate\\Support\\Facades\\DB::commit();',
+            ' echo json_encode(["result"=>"mutated"])."\\n";',
+            '} catch (Illuminate\\Database\\QueryException $e) {',
+            ' if (Illuminate\\Support\\Facades\\DB::transactionLevel() > 0) { Illuminate\\Support\\Facades\\DB::rollBack(); }',
+            ' $c=App\\Services\\VersionGateLock::mutationConflict($e);',
+            ' echo json_encode(["result"=>$c?->errorCode ?? "db_error","sql_state"=>$e->getCode()])."\\n";',
+            '}',
+        ]), $linkId);
+    }
+
+    private function defectInsertForLinkScript(int $linkId): string
+    {
+        return sprintf(implode("\n", [
+            'Illuminate\\Support\\Facades\\DB::beginTransaction();',
+            'try {',
+            ' $link=App\\Models\\RequirementProject::findOrFail(%d);',
+            ' App\\Models\\Defect::factory()->create(["requirement_id"=>$link->requirement_id,"project_id"=>$link->project_id,"severity"=>App\\Enums\\DefectSeverity::SERIOUS,"status"=>App\\Enums\\DefectStatus::REOPENED]);',
+            ' usleep(4000000);',
+            ' Illuminate\\Support\\Facades\\DB::commit();',
+            ' echo json_encode(["result"=>"mutated"])."\\n";',
+            '} catch (Illuminate\\Database\\QueryException $e) {',
+            ' if (Illuminate\\Support\\Facades\\DB::transactionLevel() > 0) { Illuminate\\Support\\Facades\\DB::rollBack(); }',
+            ' $c=App\\Services\\VersionGateLock::mutationConflict($e);',
+            ' echo json_encode(["result"=>$c?->errorCode ?? "db_error","sql_state"=>$e->getCode()])."\\n";',
+            '}',
+        ]), $linkId);
+    }
+
+    private function transitionAfterPlanningScript(int $versionId, int $actorId): string
+    {
+        return sprintf(implode("\n", [
+            'try {',
+            ' $version=App\\Models\\ProjectVersion::findOrFail(%d);',
+            ' app(App\\Services\\ProjectVersionService::class)->transition($version, App\\Enums\\ProjectVersionStatus::READY_TO_RELEASE, $version->lock_version, App\\Models\\User::findOrFail(%d));',
+            ' echo json_encode(["result"=>"ready"])."\\n";',
+            '} catch (App\\Exceptions\\DomainConflictException $e) { echo json_encode(["result"=>$e->errorCode])."\\n";',
+            '} catch (Illuminate\\Database\\QueryException $e) { echo json_encode(["result"=>"db_error","sql_state"=>$e->getCode()])."\\n"; }',
+        ]), $versionId, $actorId);
+    }
+
+    private function releaseAfterPlanningScript(int $versionId, int $actorId): string
+    {
+        return sprintf(implode("\n", [
+            'try {',
+            ' $version=App\\Models\\ProjectVersion::findOrFail(%d);',
+            ' $version=app(App\\Services\\ProjectVersionService::class)->transition($version, App\\Enums\\ProjectVersionStatus::READY_TO_RELEASE, $version->lock_version, App\\Models\\User::findOrFail(%d));',
+            ' app(App\\Services\\ProjectReleaseService::class)->release($version, App\\Models\\User::findOrFail(%d), ["lock_version"=>$version->lock_version,"release_notes"=>"Race","force"=>false]);',
+            ' echo json_encode(["result"=>"released"])."\\n";',
+            '} catch (App\\Exceptions\\DomainConflictException $e) { echo json_encode(["result"=>$e->errorCode])."\\n";',
+            '} catch (Illuminate\\Database\\QueryException $e) { echo json_encode(["result"=>"db_error","sql_state"=>$e->getCode()])."\\n"; }',
+        ]), $versionId, $actorId, $actorId);
+    }
+
+    private function waitForFile(string $path, Process $process): void
+    {
+        $deadline = microtime(true) + 5;
+        while (! file_exists($path) && microtime(true) < $deadline) {
+            if (! $process->isRunning()) {
+                break;
+            }
+            usleep(10_000);
+        }
+
+        $this->assertFileExists($path, $process->getOutput().$process->getErrorOutput());
     }
 
     private function waitScript(string $barrier): string

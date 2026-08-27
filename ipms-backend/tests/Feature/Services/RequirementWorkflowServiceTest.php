@@ -1216,10 +1216,14 @@ class RequirementWorkflowServiceTest extends TestCase
             ProjectVersionStatus::RELEASED,
             ProjectVersionStatus::ARCHIVED,
         ] as $status) {
-            $version = ProjectVersion::factory()->for($project)->create(['status' => $status]);
+            $version = ProjectVersion::factory()->for($project)->inTesting()->create();
             $link = RequirementProject::factory()->forVersion($version)->create([
                 'delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY,
             ]);
+            DB::table('project_versions')->where('id', $version->id)->update([
+                'status' => $status->value,
+            ]);
+            $version->refresh();
 
             try {
                 $this->service()->transitionProjectDelivery(

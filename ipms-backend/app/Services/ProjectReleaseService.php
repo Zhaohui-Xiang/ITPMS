@@ -68,37 +68,51 @@ final class ProjectReleaseService
         User $actor,
         ReleaseCommand $command,
     ): ProjectVersion {
-        $this->versionGateLock->acquire($versionId);
-
-        $initialScopeIds = RequirementProject::query()
+        $initialLinks = RequirementProject::query()
             ->where('project_version_id', $versionId)
             ->orderBy('id')
-            ->pluck('id')
-            ->map(static fn ($id): int => (int) $id)
-            ->all();
+            ->get(['id', 'requirement_id', 'project_id']);
+
+        $this->versionGateLock->acquireScopes(
+            $initialLinks->map(static fn (RequirementProject $link): array => [
+                'requirement_id' => $link->requirement_id,
+                'project_id' => $link->project_id,
+            ]),
+        );
+        $this->versionGateLock->acquire($versionId);
 
         $links = RequirementProject::query()
-            ->whereKey($initialScopeIds)
+            ->whereKey($initialLinks->pluck('id')->all())
             ->orderBy('id')
             ->lockForUpdate()
             ->get();
-
         $locked = ProjectVersion::query()
             ->whereKey($versionId)
             ->lockForUpdate()
             ->firstOrFail();
-
-        $liveScopeIds = RequirementProject::query()
+        $liveLinks = RequirementProject::query()
             ->where('project_version_id', $locked->id)
             ->where('project_id', $locked->project_id)
             ->orderBy('id')
-            ->pluck('id')
-            ->map(static fn ($id): int => (int) $id)
-            ->all();
+            ->get(['id', 'requirement_id', 'project_id']);
 
-        if ($initialScopeIds !== $liveScopeIds) {
+        $initialScope = $initialLinks->map(static fn (RequirementProject $link): array => [
+            'id' => $link->id,
+            'requirement_id' => $link->requirement_id,
+            'project_id' => $link->project_id,
+        ])->values()->all();
+        $liveScope = $liveLinks->map(static fn (RequirementProject $link): array => [
+            'id' => $link->id,
+            'requirement_id' => $link->requirement_id,
+            'project_id' => $link->project_id,
+        ])->values()->all();
+
+        if ($initialScope !== $liveScope) {
             throw new ReleaseScopeChanged;
         }
+        $liveScopeIds = $liveLinks->pluck('id')
+            ->map(static fn ($id): int => (int) $id)
+            ->all();
 
         $force = $command->force;
         $reason = $command->forceReason ?? '';

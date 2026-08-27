@@ -18,6 +18,7 @@ use App\Models\Task;
 use App\Models\User;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
@@ -248,8 +249,7 @@ class ProjectVersionSchemaTest extends TestCase
 
     public function test_release_snapshot_restricts_target_version_deletion(): void
     {
-        $version = ProjectVersion::factory()->create();
-        $actor = User::factory()->internal()->create();
+        [$version, $actor, $releasedAt] = $this->releasedVersionForSnapshot();
         ProjectVersionReleaseSnapshot::createForRelease([
             'project_version_id' => $version->id,
             'requirement_scope' => [],
@@ -258,7 +258,7 @@ class ProjectVersionSchemaTest extends TestCase
             'gate_result' => ['passed' => true],
             'is_override' => false,
             'released_by_id' => $actor->id,
-            'released_at' => now(),
+            'released_at' => $releasedAt,
         ]);
 
         $this->expectException(QueryException::class);
@@ -267,8 +267,7 @@ class ProjectVersionSchemaTest extends TestCase
 
     public function test_release_snapshot_is_unique_per_project_version(): void
     {
-        $version = ProjectVersion::factory()->create();
-        $actor = User::factory()->internal()->create();
+        [$version, $actor, $releasedAt] = $this->releasedVersionForSnapshot();
         $attributes = [
             'project_version_id' => $version->id,
             'requirement_scope' => [],
@@ -278,7 +277,7 @@ class ProjectVersionSchemaTest extends TestCase
             'release_notes' => null,
             'is_override' => false,
             'released_by_id' => $actor->id,
-            'released_at' => now(),
+            'released_at' => $releasedAt,
         ];
 
         ProjectVersionReleaseSnapshot::createForRelease($attributes);
@@ -317,8 +316,7 @@ class ProjectVersionSchemaTest extends TestCase
 
     public function test_history_and_release_snapshot_cast_structured_fields(): void
     {
-        $version = ProjectVersion::factory()->create();
-        $actor = User::factory()->internal()->create();
+        [$version, $actor, $releasedAt] = $this->releasedVersionForSnapshot('Schema test');
 
         $history = ProjectVersionHistory::create([
             'project_version_id' => $version->id,
@@ -338,7 +336,7 @@ class ProjectVersionSchemaTest extends TestCase
             'release_notes' => 'Schema test',
             'is_override' => false,
             'released_by_id' => $actor->id,
-            'released_at' => now(),
+            'released_at' => $releasedAt,
         ]);
 
         $this->assertSame(ProjectVersionStatus::DRAFT, $history->from_status);
@@ -458,5 +456,26 @@ class ProjectVersionSchemaTest extends TestCase
         $managedProject = Project::factory()->withManager($manager)->create();
         $this->assertTrue($managedProject->manager->is($manager));
         $this->assertSame($manager->id, $managedProject->created_by_id);
+    }
+
+    /**
+     * @return array{ProjectVersion, User, Carbon}
+     */
+    private function releasedVersionForSnapshot(?string $releaseNotes = null): array
+    {
+        $actor = User::factory()->internal()->create();
+        $releasedAt = now();
+        $version = ProjectVersion::factory()->create([
+            'status' => ProjectVersionStatus::RELEASED,
+            'release_notes' => $releaseNotes,
+            'released_by_id' => $actor->id,
+            'released_at' => $releasedAt,
+        ]);
+
+        return [
+            $version,
+            $actor,
+            $releasedAt,
+        ];
     }
 }
