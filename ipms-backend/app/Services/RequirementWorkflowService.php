@@ -246,14 +246,27 @@ class RequirementWorkflowService
                 $link->project()->firstOrFail(),
             ]);
 
+            $target = $targetStatus instanceof ProjectDeliveryStatus
+                ? $targetStatus
+                : $this->deliveryStatusFrom($targetStatus);
+            $current = $link->delivery_status;
+            $acceptanceVersionId = null;
+
             if ($link->project_version_id !== null) {
                 /** @var ProjectVersion|null $version */
                 $version = $versions->get($link->project_version_id);
-                if ($version !== null && in_array($version->status, [
-                    ProjectVersionStatus::READY_TO_RELEASE,
-                    ProjectVersionStatus::RELEASED,
-                    ProjectVersionStatus::ARCHIVED,
-                ], true)) {
+                $isReleasedAcceptance = $version !== null
+                    && $version->status === ProjectVersionStatus::RELEASED
+                    && $current === ProjectDeliveryStatus::DEPLOYED
+                    && $target === ProjectDeliveryStatus::ACCEPTED;
+
+                if ($version !== null
+                    && in_array($version->status, [
+                        ProjectVersionStatus::READY_TO_RELEASE,
+                        ProjectVersionStatus::RELEASED,
+                        ProjectVersionStatus::ARCHIVED,
+                    ], true)
+                    && ! $isReleasedAcceptance) {
                     throw new DomainConflictException(
                         'VERSION_LOCKED',
                         errors: [
@@ -263,12 +276,11 @@ class RequirementWorkflowService
                         message: 'The current version status is immutable.',
                     );
                 }
-            }
 
-            $target = $targetStatus instanceof ProjectDeliveryStatus
-                ? $targetStatus
-                : $this->deliveryStatusFrom($targetStatus);
-            $current = $link->delivery_status;
+                if ($isReleasedAcceptance) {
+                    $acceptanceVersionId = $version->id;
+                }
+            }
 
             if ($current === ProjectDeliveryStatus::PENDING_DEPLOY
                 && $target === ProjectDeliveryStatus::DEPLOYED) {
@@ -292,7 +304,11 @@ class RequirementWorkflowService
                 ]);
             }
 
-            $link->update(['delivery_status' => $target]);
+            $this->versionGateLock->runAuthorizedRequirementProjectMutations(
+                [$link->id],
+                fn (): bool => $link->update(['delivery_status' => $target]),
+                acceptanceVersionId: $acceptanceVersionId,
+            );
 
             if ($link->project_version_id !== null) {
                 ProjectVersionHistory::query()->create([
@@ -399,9 +415,14 @@ class RequirementWorkflowService
 
         $this->assertVersionScopeMutable($links, $versions);
 
-        foreach ($links as $link) {
-            $link->update(['delivery_status' => ProjectDeliveryStatus::ASSIGNED]);
-        }
+        $this->versionGateLock->runAuthorizedRequirementProjectMutations(
+            $links->pluck('id'),
+            function () use ($links): void {
+                foreach ($links as $link) {
+                    $link->update(['delivery_status' => ProjectDeliveryStatus::ASSIGNED]);
+                }
+            },
+        );
 
         $locked->update([
             'status' => RequirementStatus::ASSIGNED->value,
@@ -649,15 +670,20 @@ class RequirementWorkflowService
         $this->assertVersionScopeMutable($lockedLinks, $versions);
         $links = $lockedLinks->keyBy('project_id');
 
-        foreach ($links as $projectId => $link) {
-            if (! in_array((int) $projectId, $projectIds, true)) {
-                $link->delete();
+        $this->versionGateLock->runAuthorizedRequirementProjectMutations(
+            $links->pluck('id'),
+            function () use ($links, $projectIds): void {
+                foreach ($links as $projectId => $link) {
+                    if (! in_array((int) $projectId, $projectIds, true)) {
+                        $link->delete();
 
-                continue;
-            }
+                        continue;
+                    }
 
-            $link->update(['delivery_status' => ProjectDeliveryStatus::ASSIGNED]);
-        }
+                    $link->update(['delivery_status' => ProjectDeliveryStatus::ASSIGNED]);
+                }
+            },
+        );
 
         foreach ($projectIds as $projectId) {
             if (! $links->has($projectId)) {
@@ -696,11 +722,15 @@ class RequirementWorkflowService
 
     private function createProjectLink(Requirement $requirement, int $projectId): void
     {
-        RequirementProject::query()->create([
-            'requirement_id' => $requirement->id,
-            'project_id' => $projectId,
-            'delivery_status' => ProjectDeliveryStatus::ASSIGNED,
-        ]);
+        $this->versionGateLock->runAuthorizedRequirementProjectInsert(
+            $requirement->id,
+            $projectId,
+            fn (): RequirementProject => RequirementProject::query()->create([
+                'requirement_id' => $requirement->id,
+                'project_id' => $projectId,
+                'delivery_status' => ProjectDeliveryStatus::ASSIGNED,
+            ]),
+        );
     }
 
     /**

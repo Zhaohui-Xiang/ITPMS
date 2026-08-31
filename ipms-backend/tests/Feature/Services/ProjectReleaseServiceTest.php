@@ -20,6 +20,8 @@ use App\Models\RequirementProject;
 use App\Models\Task;
 use App\Models\User;
 use App\Services\ProjectReleaseService;
+use App\Services\ProjectVersionService;
+use App\Services\RequirementWorkflowService;
 use Database\Seeders\PermissionSeeder;
 use Database\Seeders\RolePermissionSeeder;
 use Database\Seeders\RoleSeeder;
@@ -79,6 +81,7 @@ class ProjectReleaseServiceTest extends TestCase
             'requirement_project_id' => $link->id,
             'requirement_id' => $link->requirement_id,
             'project_id' => $project->id,
+            'pre_release_delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY->value,
             'delivery_status' => ProjectDeliveryStatus::DEPLOYED->value,
         ]], $snapshot->requirement_scope);
         $this->assertSame(2, $snapshot->task_count);
@@ -101,6 +104,106 @@ class ProjectReleaseServiceTest extends TestCase
             && $event->releasedById === $manager->id
             && $event->isOverride === false
         );
+    }
+
+    public function test_release_history_cannot_be_appended_after_release(): void
+    {
+        [$manager, $project] = $this->managedProject();
+        $version = ProjectVersion::factory()
+            ->for($project)
+            ->ready()
+            ->withPassingScope()
+            ->create();
+        $released = $this->release($version, $manager);
+        $history = ProjectVersionHistory::query()->sole();
+
+        try {
+            DB::table('project_version_histories')->insert([
+                'project_version_id' => $released->id,
+                'event_type' => 'force_release',
+                'from_status' => ProjectVersionStatus::READY_TO_RELEASE->value,
+                'to_status' => ProjectVersionStatus::RELEASED->value,
+                'actor_id' => $manager->id,
+                'reason' => 'Forged duplicate',
+                'metadata' => json_encode($history->metadata, JSON_THROW_ON_ERROR),
+                'created_at' => now(),
+            ]);
+            $this->fail('Expected a second release history row to be rejected.');
+        } catch (QueryException $exception) {
+            $this->assertSame('IV002', $exception->getCode());
+        }
+
+        $this->assertSame(1, ProjectVersionHistory::query()
+            ->where('project_version_id', $released->id)
+            ->whereIn('event_type', ['release', 'force_release'])
+            ->count());
+    }
+
+    public function test_released_scope_can_be_accepted_and_version_archived(): void
+    {
+        [$manager, $project] = $this->managedProject();
+        DB::table('project_members')->insert([
+            'project_id' => $project->id,
+            'user_id' => $manager->id,
+            'role_in_project' => 'pm',
+            'assigned_at' => now(),
+        ]);
+        $version = ProjectVersion::factory()
+            ->for($project)
+            ->inTesting()
+            ->withPassingScope()
+            ->create(['release_notes' => 'Ready for release']);
+        $ready = app(ProjectVersionService::class)->transition(
+            $version,
+            ProjectVersionStatus::READY_TO_RELEASE,
+            1,
+            $manager,
+        );
+        $released = $this->release($ready, $manager, $ready->lock_version);
+        $link = $released->requirementLinks()->sole();
+
+        $accepted = app(RequirementWorkflowService::class)->transitionProjectDelivery(
+            $link->requirement,
+            $project->id,
+            ProjectDeliveryStatus::ACCEPTED,
+            $manager,
+        );
+        $archived = app(ProjectVersionService::class)->transition(
+            $released,
+            ProjectVersionStatus::ARCHIVED,
+            $released->lock_version,
+            $manager,
+        );
+
+        $this->assertSame(ProjectDeliveryStatus::ACCEPTED, $accepted->delivery_status);
+        $this->assertSame(ProjectVersionStatus::ARCHIVED, $archived->status);
+    }
+
+    public function test_release_authorization_does_not_leak_to_outer_transaction(): void
+    {
+        [$manager, $project] = $this->managedProject();
+        $version = ProjectVersion::factory()
+            ->for($project)
+            ->ready()
+            ->withPassingScope()
+            ->create();
+        $link = $version->requirementLinks()->sole();
+
+        DB::beginTransaction();
+        try {
+            $this->release($version, $manager);
+
+            try {
+                DB::table('requirement_project')
+                    ->where('id', $link->id)
+                    ->update(['version_assigned_at' => now()->addDay()]);
+                $this->fail('Expected release authorization to be cleared.');
+            } catch (QueryException $exception) {
+                $this->assertSame('IV004', $exception->getCode());
+            }
+        } finally {
+            DB::rollBack();
+        }
     }
 
     public function test_normal_release_enforces_actor_status_lock_and_live_gates_without_writes(): void

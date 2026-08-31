@@ -10,6 +10,7 @@ use App\Models\ProjectVersionHistory;
 use App\Models\RequirementProject;
 use App\Models\User;
 use App\Services\ProjectVersionService;
+use App\Services\VersionGateLock;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\DatabaseTruncation;
 use Illuminate\Support\Facades\DB;
@@ -636,12 +637,17 @@ SQL);
             DB::table('project_version_histories')
                 ->whereIn('project_version_id', [$first->id, $second->id])
                 ->delete();
-            DB::table('requirement_project')
-                ->whereIn('id', [$firstLink->id, $secondLink->id])
-                ->delete();
-            DB::table('requirements')
-                ->whereIn('id', [$firstLink->requirement_id, $secondLink->requirement_id])
-                ->delete();
+            $this->deleteRequirementProjectsForTest([
+                $firstLink->id,
+                $secondLink->id,
+            ]);
+            DB::transaction(function () use ($firstLink, $secondLink): void {
+                app(VersionGateLock::class)
+                    ->authorizeRequirementProjectMutations([]);
+                DB::table('requirements')
+                    ->whereIn('id', [$firstLink->requirement_id, $secondLink->requirement_id])
+                    ->delete();
+            });
             DB::table('project_versions')
                 ->whereIn('id', [$first->id, $second->id])
                 ->delete();

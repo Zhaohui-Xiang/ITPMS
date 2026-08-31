@@ -8,6 +8,7 @@ use App\Models\ProjectVersion;
 use App\Models\Requirement;
 use App\Models\RequirementProject;
 use Illuminate\Database\Eloquent\Factories\Factory;
+use Illuminate\Support\Facades\DB;
 
 /**
  * @extends Factory<RequirementProject>
@@ -15,6 +16,37 @@ use Illuminate\Database\Eloquent\Factories\Factory;
 class RequirementProjectFactory extends Factory
 {
     protected $model = RequirementProject::class;
+
+    public function configure(): static
+    {
+        return $this
+            ->afterMaking(function (RequirementProject $link): void {
+                DB::select(
+                    <<<'SQL'
+                        SELECT set_config(
+                            'itpms.requirement_project_insert_scope',
+                            ?,
+                            false
+                        )
+                        SQL,
+                    [json_encode([
+                        'requirement_id' => (int) $link->requirement_id,
+                        'project_id' => (int) $link->project_id,
+                    ], JSON_THROW_ON_ERROR)],
+                );
+            })
+            ->afterCreating(function (): void {
+                DB::select(
+                    <<<'SQL'
+                        SELECT set_config(
+                            'itpms.requirement_project_insert_scope',
+                            '',
+                            false
+                        )
+                        SQL,
+                );
+            });
+    }
 
     /**
      * @return array<string, mixed>

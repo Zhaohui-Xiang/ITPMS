@@ -10,9 +10,11 @@ use App\Enums\TaskStatus;
 use App\Models\Defect;
 use App\Models\Project;
 use App\Models\ProjectVersion;
+use App\Models\Requirement;
 use App\Models\RequirementProject;
 use App\Models\Task;
 use App\Models\User;
+use App\Services\ReleaseGateService;
 use App\Services\VersionGateLock;
 use Database\Seeders\PermissionSeeder;
 use Database\Seeders\RolePermissionSeeder;
@@ -143,44 +145,178 @@ class VersionGateMutationTest extends TestCase
             ]);
             $this->fail('Expected direct scope assignment to be rejected.');
         } catch (QueryException $exception) {
-            $this->assertSame('IV001', $exception->getCode());
+            $this->assertSame('IV004', $exception->getCode());
             $conflict = VersionGateLock::mutationConflict($exception);
             $this->assertNotNull($conflict);
-            $this->assertSame('VERSION_LOCKED', $conflict->errorCode);
+            $this->assertSame('VERSION_SCOPE_BUSY', $conflict->errorCode);
             $this->assertSame(
-                'The project version no longer accepts requirement scope mapping, task, or defect mutations.',
+                'The requirement scope changed outside its controlled workflow. Reload and try again.',
                 $conflict->getMessage(),
             );
-            $this->assertSame([
-                'project_version_id' => [$version->id],
-                'status' => ['current' => ProjectVersionStatus::READY_TO_RELEASE->value],
-            ], $conflict->errors);
+            $this->assertSame(
+                ['requirement_project' => ['reload_required']],
+                $conflict->errors,
+            );
         }
 
         $this->assertNull($link->fresh()->project_version_id);
     }
 
-    public function test_snapshot_insert_requires_matching_released_version_metadata(): void
+    public function test_requirement_project_insert_requires_workflow_context(): void
     {
-        $manager = User::factory()->internal()->create();
-        $version = ProjectVersion::factory()->create([
-            'release_notes' => 'Original',
-        ]);
+        $requirement = Requirement::factory()->create();
+        $project = Project::factory()->create();
 
         try {
-            DB::table('project_version_release_snapshots')->insert([
-                'project_version_id' => $version->id,
-                'requirement_scope' => '[]',
-                'task_count' => 0,
-                'defect_count' => 0,
-                'gate_result' => '{}',
-                'release_notes' => 'Original',
-                'is_override' => false,
-                'override_reason' => null,
-                'released_by_id' => $manager->id,
-                'released_at' => now(),
+            DB::table('requirement_project')->insert([
+                'requirement_id' => $requirement->id,
+                'project_id' => $project->id,
+                'project_version_id' => null,
+                'delivery_status' => ProjectDeliveryStatus::ACCEPTED->value,
+                'version_assigned_by_id' => null,
+                'version_assigned_at' => null,
+                'created_at' => now(),
             ]);
-            $this->fail('Expected a draft version snapshot to be rejected.');
+            $this->fail('Expected a direct pivot insert to require workflow context.');
+        } catch (QueryException $exception) {
+            $this->assertSame('IV004', $exception->getCode());
+        }
+
+        $this->assertDatabaseMissing('requirement_project', [
+            'requirement_id' => $requirement->id,
+            'project_id' => $project->id,
+        ]);
+    }
+
+    public function test_deleting_an_assigner_preserves_version_assignment_with_null_actor(): void
+    {
+        $assigner = User::factory()->internal()->create();
+        $link = RequirementProject::factory()->create([
+            'version_assigned_by_id' => $assigner->id,
+            'version_assigned_at' => now(),
+        ]);
+
+        $assigner->delete();
+
+        $this->assertNull($link->fresh()->version_assigned_by_id);
+    }
+
+    public function test_deleting_a_requirement_cascades_its_project_links(): void
+    {
+        $link = RequirementProject::factory()->create();
+        $requirement = $link->requirement;
+
+        $requirement->delete();
+
+        $this->assertDatabaseMissing('requirement_project', ['id' => $link->id]);
+    }
+
+    public function test_release_and_acceptance_contexts_cannot_change_pivot_identity(): void
+    {
+        $version = ProjectVersion::factory()->ready()->withPassingScope()->create();
+        $link = $version->requirementLinks()->sole();
+        $newId = $link->id + 100000;
+
+        try {
+            DB::transaction(function () use ($version, $link, $newId): void {
+                DB::select(
+                    "SELECT set_config('itpms.requirement_project_write_ids', ?, true)",
+                    [json_encode([$link->id], JSON_THROW_ON_ERROR)],
+                );
+                DB::select(
+                    "SELECT set_config('itpms.release_project_version_id', ?, true)",
+                    [(string) $version->id],
+                );
+                DB::table('requirement_project')->where('id', $link->id)->update([
+                    'id' => $newId,
+                    'delivery_status' => ProjectDeliveryStatus::DEPLOYED->value,
+                ]);
+                $this->fail('Expected release context to preserve pivot identity.');
+            });
+        } catch (QueryException $exception) {
+            $this->assertSame('IV001', $exception->getCode());
+        }
+
+        DB::transaction(function () use ($version, $link): void {
+            DB::select(
+                "SELECT set_config('itpms.requirement_project_write_ids', ?, true)",
+                [json_encode([$link->id], JSON_THROW_ON_ERROR)],
+            );
+            DB::select(
+                "SELECT set_config('itpms.release_project_version_id', ?, true)",
+                [(string) $version->id],
+            );
+            DB::table('requirement_project')->where('id', $link->id)->update([
+                'delivery_status' => ProjectDeliveryStatus::DEPLOYED->value,
+            ]);
+            DB::table('project_versions')->where('id', $version->id)->update([
+                'status' => ProjectVersionStatus::RELEASED->value,
+            ]);
+        });
+
+        try {
+            DB::transaction(function () use ($version, $link, $newId): void {
+                DB::select(
+                    "SELECT set_config('itpms.requirement_project_write_ids', ?, true)",
+                    [json_encode([$link->id], JSON_THROW_ON_ERROR)],
+                );
+                DB::select(
+                    "SELECT set_config('itpms.acceptance_project_version_id', ?, true)",
+                    [(string) $version->id],
+                );
+                DB::table('requirement_project')->where('id', $link->id)->update([
+                    'id' => $newId,
+                    'delivery_status' => ProjectDeliveryStatus::ACCEPTED->value,
+                ]);
+                $this->fail('Expected acceptance context to preserve pivot identity.');
+            });
+        } catch (QueryException $exception) {
+            $this->assertSame('IV001', $exception->getCode());
+        }
+    }
+
+    public function test_snapshot_insert_requires_release_service_context_and_exact_live_payload(): void
+    {
+        $manager = User::factory()->internal()->create();
+        $releasedAt = now();
+        $version = ProjectVersion::factory()->create([
+            'status' => ProjectVersionStatus::READY_TO_RELEASE,
+            'release_notes' => 'Original',
+        ]);
+        $expectedGate = [
+            ...app(ReleaseGateService::class)
+                ->check($version, ProjectVersionStatus::RELEASED)
+                ->jsonSerialize(),
+            'original_status' => ProjectVersionStatus::READY_TO_RELEASE->value,
+        ];
+        $forgedGate = $expectedGate;
+        $forgedGate['checks'][0]['details']['missing'] = ['forged'];
+
+        try {
+            DB::transaction(function () use (
+                $version,
+                $manager,
+                $releasedAt,
+                $forgedGate,
+            ): void {
+                DB::select(
+                    "SELECT set_config('itpms.release_snapshot_version_id', ?, true)",
+                    [(string) $version->id],
+                );
+                DB::table('project_version_release_snapshots')->insert([
+                    'project_version_id' => $version->id,
+                    'requirement_scope' => '[]',
+                    'task_count' => 0,
+                    'defect_count' => 0,
+                    'gate_result' => json_encode($forgedGate, JSON_THROW_ON_ERROR),
+                    'release_notes' => 'Original',
+                    'is_override' => false,
+                    'override_reason' => null,
+                    'released_by_id' => $manager->id,
+                    'released_at' => $releasedAt,
+                ]);
+            });
+            $this->fail('Expected a forged snapshot outside the release service to be rejected.');
         } catch (QueryException $exception) {
             $this->assertSame('IV003', $exception->getCode());
         }
@@ -188,6 +324,179 @@ class VersionGateMutationTest extends TestCase
         $this->assertDatabaseMissing('project_version_release_snapshots', [
             'project_version_id' => $version->id,
         ]);
+    }
+
+    public function test_snapshot_preflight_rejects_coordinated_duplicate_scope_forgery(): void
+    {
+        $migration = require database_path(
+            'migrations/2026_08_25_000031_serialize_release_gate_mutations.php',
+        );
+        $manager = User::factory()->internal()->create();
+        $version = ProjectVersion::factory()->inTesting()->create([
+            'release_notes' => 'Original',
+        ]);
+        $links = collect([
+            RequirementProject::factory()->forVersion($version)->create([
+                'delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY,
+            ]),
+            RequirementProject::factory()->forVersion($version)->create([
+                'delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY,
+            ]),
+        ])->sortBy('id')->values();
+        DB::table('project_versions')->where('id', $version->id)->update([
+            'status' => ProjectVersionStatus::READY_TO_RELEASE->value,
+        ]);
+        $releasedAt = now();
+        $gateResult = [
+            ...app(ReleaseGateService::class)
+                ->check($version, ProjectVersionStatus::RELEASED)
+                ->jsonSerialize(),
+            'original_status' => ProjectVersionStatus::READY_TO_RELEASE->value,
+        ];
+        $scope = $links->map(static fn (RequirementProject $link): array => [
+            'requirement_project_id' => $link->id,
+            'requirement_id' => $link->requirement_id,
+            'project_id' => $link->project_id,
+            'pre_release_delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY->value,
+            'delivery_status' => ProjectDeliveryStatus::DEPLOYED->value,
+        ])->all();
+
+        $snapshotId = DB::transaction(function () use (
+            $version,
+            $manager,
+            $links,
+            $scope,
+            $gateResult,
+            $releasedAt,
+        ): int {
+            DB::select(
+                "SELECT set_config('itpms.release_snapshot_version_id', ?, true)",
+                [(string) $version->id],
+            );
+            $snapshotId = DB::table('project_version_release_snapshots')->insertGetId([
+                'project_version_id' => $version->id,
+                'requirement_scope' => json_encode($scope, JSON_THROW_ON_ERROR),
+                'task_count' => 0,
+                'defect_count' => 0,
+                'gate_result' => json_encode($gateResult, JSON_THROW_ON_ERROR),
+                'release_notes' => 'Original',
+                'is_override' => false,
+                'override_reason' => null,
+                'released_by_id' => $manager->id,
+                'released_at' => $releasedAt,
+            ]);
+            DB::table('project_version_histories')->insert([
+                'project_version_id' => $version->id,
+                'event_type' => 'release',
+                'from_status' => ProjectVersionStatus::READY_TO_RELEASE->value,
+                'to_status' => ProjectVersionStatus::RELEASED->value,
+                'actor_id' => $manager->id,
+                'reason' => null,
+                'metadata' => json_encode([
+                    'is_override' => false,
+                    'snapshot_id' => $snapshotId,
+                    'requirement_project_ids' => $links->pluck('id')->all(),
+                    'failed_gates' => [],
+                    'snapshot_payload' => [
+                        'requirement_scope' => $scope,
+                        'task_count' => 0,
+                        'defect_count' => 0,
+                        'gate_result' => $gateResult,
+                        'release_notes' => 'Original',
+                    ],
+                ], JSON_THROW_ON_ERROR),
+                'created_at' => $releasedAt,
+            ]);
+            DB::select(
+                "SELECT set_config('itpms.requirement_project_write_ids', ?, true)",
+                [json_encode($links->pluck('id')->all(), JSON_THROW_ON_ERROR)],
+            );
+            DB::select(
+                "SELECT set_config('itpms.release_project_version_id', ?, true)",
+                [(string) $version->id],
+            );
+            DB::table('requirement_project')->whereIn('id', $links->pluck('id'))
+                ->update(['delivery_status' => ProjectDeliveryStatus::DEPLOYED->value]);
+            DB::table('requirements')->whereIn('id', $links->pluck('requirement_id'))
+                ->update(['status' => ProjectDeliveryStatus::DEPLOYED->value]);
+            DB::table('project_versions')->where('id', $version->id)->update([
+                'status' => ProjectVersionStatus::RELEASED->value,
+                'released_by_id' => $manager->id,
+                'released_at' => $releasedAt,
+            ]);
+
+            return $snapshotId;
+        });
+
+        $forgedScope = [$scope[0], $scope[0]];
+        $forgedGate = $gateResult;
+        foreach ($forgedGate['checks'] as &$check) {
+            if ($check['code'] === 'non_empty_scope') {
+                $check['details']['requirement_project_ids'] = [
+                    $links[0]->id,
+                    $links[0]->id,
+                ];
+            }
+        }
+        unset($check);
+
+        $migration->down();
+        DB::table('project_version_release_snapshots')->where('id', $snapshotId)->update([
+            'requirement_scope' => json_encode($forgedScope, JSON_THROW_ON_ERROR),
+            'gate_result' => json_encode($forgedGate, JSON_THROW_ON_ERROR),
+        ]);
+
+        $accepted = false;
+        $sqlState = null;
+        try {
+            $migration->up();
+            $accepted = true;
+        } catch (QueryException $exception) {
+            $sqlState = $exception->getCode();
+        }
+
+        if ($accepted) {
+            $migration->down();
+        }
+        DB::table('project_version_release_snapshots')->where('id', $snapshotId)->update([
+            'requirement_scope' => json_encode($scope, JSON_THROW_ON_ERROR),
+            'gate_result' => json_encode($gateResult, JSON_THROW_ON_ERROR),
+        ]);
+        $migration->up();
+
+        $this->assertFalse($accepted, 'Expected preflight to reject duplicate forged scope.');
+        $this->assertSame('IV003', $sqlState);
+
+        $migration->down();
+        DB::table('project_versions')->where('id', $version->id)->update([
+            'release_notes' => 'Coordinated forged notes',
+        ]);
+        DB::table('project_version_release_snapshots')->where('id', $snapshotId)->update([
+            'release_notes' => 'Coordinated forged notes',
+        ]);
+
+        $accepted = false;
+        $sqlState = null;
+        try {
+            $migration->up();
+            $accepted = true;
+        } catch (QueryException $exception) {
+            $sqlState = $exception->getCode();
+        }
+
+        if ($accepted) {
+            $migration->down();
+        }
+        DB::table('project_versions')->where('id', $version->id)->update([
+            'release_notes' => 'Original',
+        ]);
+        DB::table('project_version_release_snapshots')->where('id', $snapshotId)->update([
+            'release_notes' => 'Original',
+        ]);
+        $migration->up();
+
+        $this->assertFalse($accepted, 'Expected preflight to reject forged snapshot payload.');
+        $this->assertSame('IV003', $sqlState);
     }
 
     public function test_snapshot_database_trigger_rolls_back_and_reapplies_cleanly(): void
@@ -198,31 +507,119 @@ class VersionGateMutationTest extends TestCase
         $manager = User::factory()->internal()->create();
         $releasedAt = now();
         $version = ProjectVersion::factory()->create([
-            'status' => ProjectVersionStatus::RELEASED,
+            'status' => ProjectVersionStatus::READY_TO_RELEASE,
             'release_notes' => 'Original',
-            'released_by_id' => $manager->id,
-            'released_at' => $releasedAt,
         ]);
-        $snapshotId = DB::table('project_version_release_snapshots')->insertGetId([
-            'project_version_id' => $version->id,
-            'requirement_scope' => '[]',
-            'task_count' => 0,
-            'defect_count' => 0,
-            'gate_result' => '{}',
-            'release_notes' => 'Original',
-            'is_override' => false,
-            'override_reason' => null,
-            'released_by_id' => $manager->id,
-            'released_at' => $releasedAt,
-        ]);
+        $gateResult = [
+            ...app(ReleaseGateService::class)
+                ->check($version, ProjectVersionStatus::RELEASED)
+                ->jsonSerialize(),
+            'original_status' => ProjectVersionStatus::READY_TO_RELEASE->value,
+        ];
+        $snapshotId = DB::transaction(function () use (
+            $version,
+            $manager,
+            $releasedAt,
+            $gateResult,
+        ): int {
+            DB::select(
+                "SELECT set_config('itpms.release_snapshot_version_id', ?, true)",
+                [(string) $version->id],
+            );
+            $snapshotId = DB::table('project_version_release_snapshots')->insertGetId([
+                'project_version_id' => $version->id,
+                'requirement_scope' => '[]',
+                'task_count' => 0,
+                'defect_count' => 0,
+                'gate_result' => json_encode($gateResult, JSON_THROW_ON_ERROR),
+                'release_notes' => 'Original',
+                'is_override' => false,
+                'override_reason' => null,
+                'released_by_id' => $manager->id,
+                'released_at' => $releasedAt,
+            ]);
+            DB::table('project_version_histories')->insert([
+                'project_version_id' => $version->id,
+                'event_type' => 'release',
+                'from_status' => ProjectVersionStatus::READY_TO_RELEASE->value,
+                'to_status' => ProjectVersionStatus::RELEASED->value,
+                'actor_id' => $manager->id,
+                'reason' => null,
+                'metadata' => json_encode([
+                    'is_override' => false,
+                    'snapshot_id' => $snapshotId,
+                    'requirement_project_ids' => [],
+                    'failed_gates' => [],
+                    'snapshot_payload' => [
+                        'requirement_scope' => [],
+                        'task_count' => 0,
+                        'defect_count' => 0,
+                        'gate_result' => $gateResult,
+                        'release_notes' => 'Original',
+                    ],
+                ], JSON_THROW_ON_ERROR),
+                'created_at' => $releasedAt,
+            ]);
+            DB::table('project_versions')->where('id', $version->id)->update([
+                'status' => ProjectVersionStatus::RELEASED->value,
+                'released_by_id' => $manager->id,
+                'released_at' => $releasedAt,
+            ]);
+
+            return $snapshotId;
+        });
+        $forgedGate = $gateResult;
+        $forgedGate['checks'][0]['details']['missing'] = ['forged'];
 
         try {
             $migration->down();
             $this->assertSame(1, DB::table('project_version_release_snapshots')
                 ->where('id', $snapshotId)
-                ->update(['release_notes' => 'Rollback allowed']));
+                ->update([
+                    'gate_result' => json_encode($forgedGate, JSON_THROW_ON_ERROR),
+                ]));
 
+            try {
+                $migration->up();
+                $this->fail('Expected reapply to reject the invalid stored snapshot.');
+            } catch (QueryException $exception) {
+                $this->assertSame('IV003', $exception->getCode());
+            }
+
+            DB::table('project_version_release_snapshots')
+                ->where('id', $snapshotId)
+                ->update([
+                    'gate_result' => json_encode($gateResult, JSON_THROW_ON_ERROR),
+                ]);
             $migration->up();
+
+            $snapshotRow = (array) DB::table('project_version_release_snapshots')
+                ->where('id', $snapshotId)
+                ->firstOrFail();
+            $migration->down();
+            DB::table('project_version_release_snapshots')
+                ->where('id', $snapshotId)
+                ->delete();
+
+            $acceptedMissingSnapshot = false;
+            try {
+                $migration->up();
+                $acceptedMissingSnapshot = true;
+            } catch (QueryException $exception) {
+                $this->assertSame('IV003', $exception->getCode());
+            }
+
+            if ($acceptedMissingSnapshot) {
+                $migration->down();
+            }
+            DB::table('project_version_release_snapshots')->insert($snapshotRow);
+            $migration->up();
+
+            $this->assertFalse(
+                $acceptedMissingSnapshot,
+                'Expected reapply to reject a released version with no snapshot.',
+            );
+
             try {
                 DB::table('project_version_release_snapshots')
                     ->where('id', $snapshotId)

@@ -22,10 +22,15 @@ class DefectFactory extends Factory
     public function configure(): static
     {
         return $this->afterCreating(function (Defect $defect): void {
-            RequirementProject::query()->firstOrCreate([
-                'requirement_id' => $defect->requirement_id,
-                'project_id' => $defect->project_id,
-            ]);
+            if (! RequirementProject::query()
+                ->where('requirement_id', $defect->requirement_id)
+                ->where('project_id', $defect->project_id)
+                ->exists()) {
+                RequirementProject::factory()->create([
+                    'requirement_id' => $defect->requirement_id,
+                    'project_id' => $defect->project_id,
+                ]);
+            }
         });
     }
 

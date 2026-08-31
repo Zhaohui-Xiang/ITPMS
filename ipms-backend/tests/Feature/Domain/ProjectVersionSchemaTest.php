@@ -16,6 +16,7 @@ use App\Models\Requirement;
 use App\Models\RequirementProject;
 use App\Models\Task;
 use App\Models\User;
+use App\Services\ReleaseGateService;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -100,12 +101,12 @@ class ProjectVersionSchemaTest extends TestCase
     {
         $version = ProjectVersion::factory()->create();
         $requirement = Requirement::factory()->create();
-        $link = RequirementProject::create([
-            'requirement_id' => $requirement->id,
-            'project_id' => $version->project_id,
-            'project_version_id' => $version->id,
-            'delivery_status' => ProjectDeliveryStatus::ASSIGNED,
-        ]);
+        $link = RequirementProject::factory()
+            ->for($requirement)
+            ->forVersion($version)
+            ->create([
+                'delivery_status' => ProjectDeliveryStatus::ASSIGNED,
+            ]);
 
         $this->assertTrue($link->projectVersion->is($version));
         $this->assertSame(ProjectDeliveryStatus::ASSIGNED, $link->delivery_status);
@@ -255,7 +256,8 @@ class ProjectVersionSchemaTest extends TestCase
             'requirement_scope' => [],
             'task_count' => 0,
             'defect_count' => 0,
-            'gate_result' => ['passed' => true],
+            'gate_result' => $this->snapshotGateResult($version),
+            'release_notes' => $version->release_notes,
             'is_override' => false,
             'released_by_id' => $actor->id,
             'released_at' => $releasedAt,
@@ -273,8 +275,8 @@ class ProjectVersionSchemaTest extends TestCase
             'requirement_scope' => [],
             'task_count' => 0,
             'defect_count' => 0,
-            'gate_result' => ['passed' => true],
-            'release_notes' => null,
+            'gate_result' => $this->snapshotGateResult($version),
+            'release_notes' => $version->release_notes,
             'is_override' => false,
             'released_by_id' => $actor->id,
             'released_at' => $releasedAt,
@@ -317,6 +319,7 @@ class ProjectVersionSchemaTest extends TestCase
     public function test_history_and_release_snapshot_cast_structured_fields(): void
     {
         [$version, $actor, $releasedAt] = $this->releasedVersionForSnapshot('Schema test');
+        $gateResult = $this->snapshotGateResult($version);
 
         $history = ProjectVersionHistory::create([
             'project_version_id' => $version->id,
@@ -329,10 +332,10 @@ class ProjectVersionSchemaTest extends TestCase
         ]);
         $snapshot = $this->insertReleaseSnapshot([
             'project_version_id' => $version->id,
-            'requirement_scope' => [['requirement_id' => 1]],
-            'task_count' => 1,
+            'requirement_scope' => [],
+            'task_count' => 0,
             'defect_count' => 0,
-            'gate_result' => ['passed' => true],
+            'gate_result' => $gateResult,
             'release_notes' => 'Schema test',
             'is_override' => false,
             'released_by_id' => $actor->id,
@@ -342,8 +345,18 @@ class ProjectVersionSchemaTest extends TestCase
         $this->assertSame(ProjectVersionStatus::DRAFT, $history->from_status);
         $this->assertSame(ProjectVersionStatus::PLANNED, $history->to_status);
         $this->assertSame(['source' => 'test'], $history->metadata);
-        $this->assertSame([['requirement_id' => 1]], $snapshot->requirement_scope);
-        $this->assertSame(['passed' => true], $snapshot->gate_result);
+        $this->assertSame([], $snapshot->requirement_scope);
+        $this->assertTrue($snapshot->gate_result['passed']);
+        $this->assertSame([
+            'version_metadata',
+            'non_empty_scope',
+            'reviewed_assigned_scope',
+            'project_delivery',
+            'tasks_completed',
+            'severe_defects_closed',
+            'release_notes_present',
+            'acceptance_complete',
+        ], array_column($snapshot->gate_result['checks'], 'code'));
         $this->assertTrue($version->histories->contains($history));
         $this->assertTrue($version->releaseSnapshot->is($snapshot));
     }
@@ -463,11 +476,55 @@ class ProjectVersionSchemaTest extends TestCase
      */
     private function insertReleaseSnapshot(array $attributes): ProjectVersionReleaseSnapshot
     {
-        $id = DB::table('project_version_release_snapshots')->insertGetId([
-            ...$attributes,
-            'requirement_scope' => json_encode($attributes['requirement_scope'], JSON_THROW_ON_ERROR),
-            'gate_result' => json_encode($attributes['gate_result'], JSON_THROW_ON_ERROR),
-        ]);
+        $id = DB::transaction(function () use ($attributes): int {
+            DB::select(
+                "SELECT set_config('itpms.release_snapshot_version_id', ?, true)",
+                [(string) $attributes['project_version_id']],
+            );
+
+            $snapshotId = DB::table('project_version_release_snapshots')->insertGetId([
+                ...$attributes,
+                'requirement_scope' => json_encode(
+                    $attributes['requirement_scope'],
+                    JSON_THROW_ON_ERROR,
+                ),
+                'gate_result' => json_encode($attributes['gate_result'], JSON_THROW_ON_ERROR),
+            ]);
+            DB::table('project_version_histories')->insert([
+                'project_version_id' => $attributes['project_version_id'],
+                'event_type' => $attributes['is_override'] ? 'force_release' : 'release',
+                'from_status' => $attributes['gate_result']['original_status'],
+                'to_status' => ProjectVersionStatus::RELEASED->value,
+                'actor_id' => $attributes['released_by_id'],
+                'reason' => $attributes['override_reason'] ?? null,
+                'metadata' => json_encode([
+                    'is_override' => $attributes['is_override'],
+                    'snapshot_id' => $snapshotId,
+                    'requirement_project_ids' => array_column(
+                        $attributes['requirement_scope'],
+                        'requirement_project_id',
+                    ),
+                    'failed_gates' => $attributes['gate_result']['blocking'],
+                    'snapshot_payload' => [
+                        'requirement_scope' => $attributes['requirement_scope'],
+                        'task_count' => $attributes['task_count'],
+                        'defect_count' => $attributes['defect_count'],
+                        'gate_result' => $attributes['gate_result'],
+                        'release_notes' => $attributes['release_notes'],
+                    ],
+                ], JSON_THROW_ON_ERROR),
+                'created_at' => $attributes['released_at'],
+            ]);
+            DB::table('project_versions')
+                ->where('id', $attributes['project_version_id'])
+                ->update([
+                    'status' => ProjectVersionStatus::RELEASED->value,
+                    'released_by_id' => $attributes['released_by_id'],
+                    'released_at' => $attributes['released_at'],
+                ]);
+
+            return $snapshotId;
+        });
 
         return ProjectVersionReleaseSnapshot::query()->findOrFail($id);
     }
@@ -475,21 +532,33 @@ class ProjectVersionSchemaTest extends TestCase
     /**
      * @return array{ProjectVersion, User, Carbon}
      */
-    private function releasedVersionForSnapshot(?string $releaseNotes = null): array
-    {
+    private function releasedVersionForSnapshot(
+        ?string $releaseNotes = 'Schema release',
+    ): array {
         $actor = User::factory()->internal()->create();
         $releasedAt = now();
         $version = ProjectVersion::factory()->create([
-            'status' => ProjectVersionStatus::RELEASED,
+            'status' => ProjectVersionStatus::READY_TO_RELEASE,
             'release_notes' => $releaseNotes,
-            'released_by_id' => $actor->id,
-            'released_at' => $releasedAt,
         ]);
 
         return [
             $version,
             $actor,
             $releasedAt,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function snapshotGateResult(ProjectVersion $version): array
+    {
+        return [
+            ...app(ReleaseGateService::class)
+                ->check($version, ProjectVersionStatus::RELEASED)
+                ->jsonSerialize(),
+            'original_status' => ProjectVersionStatus::READY_TO_RELEASE->value,
         ];
     }
 }

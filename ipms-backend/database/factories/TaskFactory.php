@@ -22,10 +22,15 @@ class TaskFactory extends Factory
     public function configure(): static
     {
         return $this->afterCreating(function (Task $task): void {
-            RequirementProject::query()->firstOrCreate([
-                'requirement_id' => $task->requirement_id,
-                'project_id' => $task->project_id,
-            ]);
+            if (! RequirementProject::query()
+                ->where('requirement_id', $task->requirement_id)
+                ->where('project_id', $task->project_id)
+                ->exists()) {
+                RequirementProject::factory()->create([
+                    'requirement_id' => $task->requirement_id,
+                    'project_id' => $task->project_id,
+                ]);
+            }
         });
     }
 

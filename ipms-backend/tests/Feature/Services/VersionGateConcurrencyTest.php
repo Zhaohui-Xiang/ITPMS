@@ -152,12 +152,11 @@ class VersionGateConcurrencyTest extends TestCase
             'release_notes' => 'Ready',
         ]);
         $link = $target->requirementLinks()->firstOrFail();
-        DB::table('requirement_project')->where('id', $link->id)->update([
+        $link = $this->updateRequirementProjectForTest($link, [
             'project_version_id' => null,
             'version_assigned_by_id' => null,
             'version_assigned_at' => null,
         ]);
-        $link->refresh();
 
         [$planning, $mutation, $gate] = $this->stableScopeRace(
             $link,
@@ -300,7 +299,7 @@ class VersionGateConcurrencyTest extends TestCase
 
         $this->assertSame('released', $release['result']);
         $this->assertNoDeadlock($release, $mapping);
-        $this->assertSame('VERSION_LOCKED', $mapping['result']);
+        $this->assertSame('VERSION_SCOPE_BUSY', $mapping['result']);
     }
 
     public function test_direct_scope_delete_and_release_return_a_retryable_conflict_without_deadlock(): void
@@ -309,7 +308,38 @@ class VersionGateConcurrencyTest extends TestCase
 
         $this->assertSame('released', $release['result']);
         $this->assertNoDeadlock($release, $mapping);
-        $this->assertSame('VERSION_LOCKED', $mapping['result']);
+        $this->assertSame('VERSION_SCOPE_BUSY', $mapping['result']);
+    }
+
+    public function test_direct_delivery_update_cannot_overwrite_a_released_pivot(): void
+    {
+        [$release, $delivery, $linkId] = $this->directDeliveryReleaseRace();
+
+        $this->assertSame('released', $release['result']);
+        $this->assertSame('VERSION_SCOPE_BUSY', $delivery['result']);
+        $this->assertNoDeadlock($release, $delivery);
+        $this->assertSame(
+            ProjectDeliveryStatus::DEPLOYED,
+            RequirementProject::query()->findOrFail($linkId)->delivery_status,
+        );
+    }
+
+    public function test_direct_multirow_scope_updates_fail_before_tuple_deadlock(): void
+    {
+        [$first, $second] = $this->oppositeDirectScopeMutations('update');
+
+        $this->assertNoDeadlock($first, $second);
+        $this->assertSame('VERSION_SCOPE_BUSY', $first['result']);
+        $this->assertSame('VERSION_SCOPE_BUSY', $second['result']);
+    }
+
+    public function test_direct_multirow_scope_deletes_fail_before_tuple_deadlock(): void
+    {
+        [$first, $second] = $this->oppositeDirectScopeMutations('delete');
+
+        $this->assertNoDeadlock($first, $second);
+        $this->assertSame('VERSION_SCOPE_BUSY', $first['result']);
+        $this->assertSame('VERSION_SCOPE_BUSY', $second['result']);
     }
 
     /**
@@ -365,6 +395,125 @@ class VersionGateConcurrencyTest extends TestCase
         $this->assertTrue($mapping->isSuccessful(), $mapping->getErrorOutput());
 
         return [$this->payload($release), $this->payload($mapping)];
+    }
+
+    /**
+     * @return array{array<string, mixed>, array<string, mixed>, int}
+     */
+    private function directDeliveryReleaseRace(): array
+    {
+        $admin = User::factory()->withRole('super_admin')->create();
+        $version = ProjectVersion::factory()->inTesting()->create();
+        $link = RequirementProject::factory()->forVersion($version)->create([
+            'delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY,
+        ]);
+        $prefix = sys_get_temp_dir().'/ipms-delivery-release-race-'.bin2hex(random_bytes(8));
+        $released = $prefix.'-released';
+        $deliveryPid = $prefix.'-delivery-pid';
+        $proceed = $prefix.'-proceed';
+        $release = new Process([
+            PHP_BINARY,
+            '-r',
+            $this->releaseAndHoldCommitScript($version, $admin, $released, $proceed),
+        ], base_path());
+        $delivery = new Process([
+            PHP_BINARY,
+            '-r',
+            $this->directDeliveryScript($link->id, $deliveryPid),
+        ], base_path());
+
+        foreach ([$release, $delivery] as $process) {
+            $process->setTimeout(15);
+        }
+
+        try {
+            $release->start();
+            $this->waitForFile($released, $release);
+            $delivery->start();
+            $this->waitForFile($deliveryPid, $delivery);
+            $this->waitForRowWaitOrCompletion((int) file_get_contents($deliveryPid), $delivery);
+            touch($proceed);
+            $release->wait();
+            $delivery->wait();
+        } finally {
+            foreach ([$released, $deliveryPid, $proceed] as $path) {
+                @unlink($path);
+            }
+            foreach ([$release, $delivery] as $process) {
+                if ($process->isRunning()) {
+                    $process->stop();
+                }
+            }
+        }
+
+        $this->assertTrue($release->isSuccessful(), $release->getErrorOutput());
+        $this->assertTrue($delivery->isSuccessful(), $delivery->getErrorOutput());
+
+        return [$this->payload($release), $this->payload($delivery), $link->id];
+    }
+
+    /**
+     * @return array{array<string, mixed>, array<string, mixed>}
+     */
+    private function oppositeDirectScopeMutations(string $operation): array
+    {
+        $firstLink = RequirementProject::factory()
+            ->forVersion(ProjectVersion::factory()->inTesting()->create())
+            ->create();
+        $secondLink = RequirementProject::factory()
+            ->forVersion(ProjectVersion::factory()->inTesting()->create())
+            ->create();
+        $prefix = sys_get_temp_dir().'/ipms-opposite-direct-scope-'.bin2hex(random_bytes(8));
+        $firstReady = $prefix.'-first-ready';
+        $secondReady = $prefix.'-second-ready';
+        $proceed = $prefix.'-proceed';
+        $first = new Process([
+            PHP_BINARY,
+            '-r',
+            $this->directTwoRowMutationScript(
+                $firstLink->id,
+                $secondLink->id,
+                $operation,
+                $firstReady,
+                $proceed,
+            ),
+        ], base_path());
+        $second = new Process([
+            PHP_BINARY,
+            '-r',
+            $this->directTwoRowMutationScript(
+                $secondLink->id,
+                $firstLink->id,
+                $operation,
+                $secondReady,
+                $proceed,
+            ),
+        ], base_path());
+
+        foreach ([$first, $second] as $process) {
+            $process->setTimeout(15);
+        }
+
+        try {
+            $first->start();
+            $second->start();
+            $this->waitForFileOrCompletion($firstReady, $first);
+            $this->waitForFileOrCompletion($secondReady, $second);
+            touch($proceed);
+            $first->wait();
+            $second->wait();
+        } finally {
+            foreach ([$firstReady, $secondReady, $proceed] as $path) {
+                @unlink($path);
+            }
+            foreach ([$first, $second] as $process) {
+                if ($process->isRunning()) {
+                    $process->stop();
+                }
+            }
+        }
+
+        return [$this->payload($first), $this->payload($second)];
     }
 
     private function race(int $versionId, string $firstScript, string $secondScript): array
@@ -612,6 +761,39 @@ class VersionGateConcurrencyTest extends TestCase
         }
     }
 
+    private function waitForFileOrCompletion(string $path, Process $process): void
+    {
+        $deadline = microtime(true) + 5;
+        while (! file_exists($path) && $process->isRunning() && microtime(true) < $deadline) {
+            usleep(10_000);
+        }
+
+        if (! file_exists($path) && $process->isRunning()) {
+            $this->fail('Direct mutation did not reach its first statement boundary.');
+        }
+    }
+
+    private function waitForRowWaitOrCompletion(int $pid, Process $process): void
+    {
+        $deadline = microtime(true) + 5;
+        while ($process->isRunning() && microtime(true) < $deadline) {
+            $activity = DB::table('pg_stat_activity')
+                ->where('pid', $pid)
+                ->first(['wait_event_type', 'wait_event']);
+
+            if ($activity?->wait_event_type === 'Lock'
+                && in_array($activity?->wait_event, ['transactionid', 'tuple'], true)) {
+                return;
+            }
+
+            usleep(10_000);
+        }
+
+        if ($process->isRunning()) {
+            $this->fail('Delivery transaction did not reach the row lock wait.');
+        }
+    }
+
     private function releaseHoldingScopeScript(
         ProjectVersion $version,
         RequirementProject $link,
@@ -642,6 +824,98 @@ class VersionGateConcurrencyTest extends TestCase
             var_export($proceed, true),
             $version->id,
             $admin->id,
+        );
+    }
+
+    private function releaseAndHoldCommitScript(
+        ProjectVersion $version,
+        User $admin,
+        string $released,
+        string $proceed,
+    ): string {
+        return sprintf(implode("\n", [
+            'require getcwd()."/vendor/autoload.php";',
+            '$app=require getcwd()."/bootstrap/app.php";',
+            '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();',
+            'Illuminate\\Support\\Facades\\DB::beginTransaction();',
+            'try {',
+            ' app(App\\Services\\ProjectReleaseService::class)->release(App\\Models\\ProjectVersion::findOrFail(%d), App\\Models\\User::findOrFail(%d), ["lock_version"=>1,"release_notes"=>"Race","force"=>true,"force_reason"=>"Race"]);',
+            ' touch(%s);',
+            ' while (!file_exists(%s)) { usleep(1000); }',
+            ' Illuminate\\Support\\Facades\\DB::commit();',
+            ' echo json_encode(["result"=>"released"])."\\n";',
+            '} catch (Throwable $e) {',
+            ' if (Illuminate\\Support\\Facades\\DB::transactionLevel() > 0) { Illuminate\\Support\\Facades\\DB::rollBack(); }',
+            ' echo json_encode(["result"=>$e instanceof App\\Exceptions\\DomainConflictException ? $e->errorCode : "db_error","sql_state"=>$e instanceof Illuminate\\Database\\QueryException ? $e->getCode() : null])."\\n";',
+            '}',
+        ]),
+            $version->id,
+            $admin->id,
+            var_export($released, true),
+            var_export($proceed, true),
+        );
+    }
+
+    private function directDeliveryScript(int $linkId, string $pidFile): string
+    {
+        return sprintf(implode("\n", [
+            'require getcwd()."/vendor/autoload.php";',
+            '$app=require getcwd()."/bootstrap/app.php";',
+            '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();',
+            'Illuminate\\Support\\Facades\\DB::beginTransaction();',
+            'try {',
+            ' file_put_contents(%s, (string) Illuminate\\Support\\Facades\\DB::selectOne("SELECT pg_backend_pid() AS pid")->pid);',
+            ' Illuminate\\Support\\Facades\\DB::table("requirement_project")->where("id", %d)->update(["delivery_status"=>%d]);',
+            ' Illuminate\\Support\\Facades\\DB::commit();',
+            ' echo json_encode(["result"=>"mutated"])."\\n";',
+            '} catch (Illuminate\\Database\\QueryException $e) {',
+            ' if (Illuminate\\Support\\Facades\\DB::transactionLevel() > 0) { Illuminate\\Support\\Facades\\DB::rollBack(); }',
+            ' $conflict=App\\Services\\VersionGateLock::mutationConflict($e);',
+            ' echo json_encode(["result"=>$conflict?->errorCode ?? "db_error","sql_state"=>$e->getCode()])."\\n";',
+            '}',
+        ]),
+            var_export($pidFile, true),
+            $linkId,
+            ProjectDeliveryStatus::ASSIGNED->value,
+        );
+    }
+
+    private function directTwoRowMutationScript(
+        int $firstLinkId,
+        int $secondLinkId,
+        string $operation,
+        string $ready,
+        string $proceed,
+    ): string {
+        $firstStatement = $operation === 'delete'
+            ? sprintf('Illuminate\\Support\\Facades\\DB::table("requirement_project")->where("id", %d)->delete();', $firstLinkId)
+            : sprintf('Illuminate\\Support\\Facades\\DB::table("requirement_project")->where("id", %d)->update(["project_version_id"=>null]);', $firstLinkId);
+        $secondStatement = $operation === 'delete'
+            ? sprintf('Illuminate\\Support\\Facades\\DB::table("requirement_project")->where("id", %d)->delete();', $secondLinkId)
+            : sprintf('Illuminate\\Support\\Facades\\DB::table("requirement_project")->where("id", %d)->update(["project_version_id"=>null]);', $secondLinkId);
+
+        return sprintf(implode("\n", [
+            'require getcwd()."/vendor/autoload.php";',
+            '$app=require getcwd()."/bootstrap/app.php";',
+            '$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();',
+            'Illuminate\\Support\\Facades\\DB::beginTransaction();',
+            'try {',
+            ' %s',
+            ' touch(%s);',
+            ' while (!file_exists(%s)) { usleep(1000); }',
+            ' %s',
+            ' Illuminate\\Support\\Facades\\DB::commit();',
+            ' echo json_encode(["result"=>"mutated"])."\\n";',
+            '} catch (Illuminate\\Database\\QueryException $e) {',
+            ' if (Illuminate\\Support\\Facades\\DB::transactionLevel() > 0) { Illuminate\\Support\\Facades\\DB::rollBack(); }',
+            ' $conflict=App\\Services\\VersionGateLock::mutationConflict($e);',
+            ' echo json_encode(["result"=>$conflict?->errorCode ?? "db_error","sql_state"=>$e->getCode()])."\\n";',
+            '}',
+        ]),
+            $firstStatement,
+            var_export($ready, true),
+            var_export($proceed, true),
+            $secondStatement,
         );
     }
 

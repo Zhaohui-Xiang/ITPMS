@@ -17,9 +17,11 @@ use App\Models\Task;
 use App\Models\User;
 use App\Policies\ProjectVersionPolicy;
 use App\ValueObjects\ReleaseCommand;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
+use Throwable;
 
 final class ProjectReleaseService
 {
@@ -179,25 +181,11 @@ final class ProjectReleaseService
             'original_status' => $from->value,
         ];
         $releasedAt = now();
-
-        foreach ($links as $link) {
-            $link->update(['delivery_status' => ProjectDeliveryStatus::DEPLOYED]);
-        }
-
         $requirementIds = $links->pluck('requirement_id')
             ->map(static fn ($id): int => (int) $id)
             ->unique()
             ->sort()
             ->values();
-        foreach ($requirementIds as $requirementId) {
-            $this->recalculateRequirement($requirementId);
-        }
-
-        $locked->status = ProjectVersionStatus::RELEASED;
-        $locked->released_at = $releasedAt;
-        $locked->released_by_id = $actor->id;
-        $locked->lock_version++;
-        $locked->save();
 
         $snapshot = $this->createSnapshot([
             'project_version_id' => $locked->id,
@@ -205,6 +193,7 @@ final class ProjectReleaseService
                 'requirement_project_id' => $link->id,
                 'requirement_id' => $link->requirement_id,
                 'project_id' => $link->project_id,
+                'pre_release_delivery_status' => $link->delivery_status->value,
                 'delivery_status' => ProjectDeliveryStatus::DEPLOYED->value,
             ])->values()->all(),
             'task_count' => $this->scopeTaskCount($locked, $requirementIds),
@@ -216,6 +205,26 @@ final class ProjectReleaseService
             'released_by_id' => $actor->id,
             'released_at' => $releasedAt,
         ]);
+
+        $this->versionGateLock->runAuthorizedRequirementProjectMutations(
+            $liveScopeIds,
+            function () use ($links): void {
+                foreach ($links as $link) {
+                    $link->update(['delivery_status' => ProjectDeliveryStatus::DEPLOYED]);
+                }
+            },
+            releaseVersionId: $locked->id,
+        );
+
+        foreach ($requirementIds as $requirementId) {
+            $this->recalculateRequirement($requirementId);
+        }
+
+        $locked->status = ProjectVersionStatus::RELEASED;
+        $locked->released_at = $releasedAt;
+        $locked->released_by_id = $actor->id;
+        $locked->lock_version++;
+        $locked->save();
 
         ProjectVersionHistory::query()->create([
             'project_version_id' => $locked->id,
@@ -229,6 +238,13 @@ final class ProjectReleaseService
                 'snapshot_id' => $snapshot->id,
                 'requirement_project_ids' => $liveScopeIds,
                 'failed_gates' => $gate->blocking,
+                'snapshot_payload' => [
+                    'requirement_scope' => $snapshot->requirement_scope,
+                    'task_count' => $snapshot->task_count,
+                    'defect_count' => $snapshot->defect_count,
+                    'gate_result' => $snapshot->gate_result,
+                    'release_notes' => $snapshot->release_notes,
+                ],
             ],
             'created_at' => $releasedAt,
         ]);
@@ -269,16 +285,49 @@ final class ProjectReleaseService
      */
     private function createSnapshot(array $attributes): ProjectVersionReleaseSnapshot
     {
+        DB::select(
+            <<<'SQL'
+                SELECT set_config(
+                    'itpms.release_snapshot_version_id',
+                    ?,
+                    true
+                )
+                SQL,
+            [(string) $attributes['project_version_id']],
+        );
         self::$snapshotCreationDepth++;
 
         try {
             /** @var ProjectVersionReleaseSnapshot $snapshot */
             $snapshot = ProjectVersionReleaseSnapshot::query()->create($attributes);
-
-            return $snapshot;
-        } finally {
+        } catch (QueryException $exception) {
             self::$snapshotCreationDepth--;
+
+            throw $exception;
+        } catch (Throwable $exception) {
+            self::$snapshotCreationDepth--;
+            $this->clearSnapshotAuthorization();
+
+            throw $exception;
         }
+
+        self::$snapshotCreationDepth--;
+        $this->clearSnapshotAuthorization();
+
+        return $snapshot;
+    }
+
+    private function clearSnapshotAuthorization(): void
+    {
+        DB::select(
+            <<<'SQL'
+                SELECT set_config(
+                    'itpms.release_snapshot_version_id',
+                    '',
+                    true
+                )
+                SQL,
+        );
     }
 
     private function assertNormalActor(ProjectVersion $version, User $actor): void

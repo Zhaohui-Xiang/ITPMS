@@ -172,7 +172,9 @@ class ReleaseGateServiceTest extends TestCase
             $delivery['details']['minimum_status'],
         );
 
-        $blocked->update(['delivery_status' => ProjectDeliveryStatus::IN_TESTING->value]);
+        $blocked = $this->updateRequirementProjectForTest($blocked, [
+            'delivery_status' => ProjectDeliveryStatus::IN_TESTING->value,
+        ]);
         $this->assertTrue(
             $this->service()->check($version, ProjectVersionStatus::IN_TESTING)->passed,
         );
@@ -340,7 +342,9 @@ class ReleaseGateServiceTest extends TestCase
             $this->byCode($failed, 'acceptance_complete')['details']['failing_requirement_project_ids'],
         );
 
-        $link->update(['delivery_status' => ProjectDeliveryStatus::ACCEPTED->value]);
+        $link = $this->updateRequirementProjectForTest($link, [
+            'delivery_status' => ProjectDeliveryStatus::ACCEPTED->value,
+        ]);
         $defect->update(['status' => DefectStatus::CLOSED->value]);
         $this->assertTrue(
             $this->service()->check($version, ProjectVersionStatus::ARCHIVED)->passed,

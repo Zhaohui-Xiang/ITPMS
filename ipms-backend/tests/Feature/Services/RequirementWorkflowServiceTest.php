@@ -53,9 +53,12 @@ class RequirementWorkflowServiceTest extends TestCase
         $requirement = Requirement::factory()->withProjects(2)->create([
             'status' => RequirementStatus::PENDING_REVIEW->value,
         ]);
-        $requirement->projectLinks()->first()->update([
-            'delivery_status' => ProjectDeliveryStatus::IN_TESTING,
-        ]);
+        $this->updateRequirementProjectForTest(
+            $requirement->projectLinks()->firstOrFail(),
+            [
+                'delivery_status' => ProjectDeliveryStatus::IN_TESTING,
+            ],
+        );
 
         $status = $this->service()->recalculateAggregateStatus($requirement);
 
@@ -103,9 +106,12 @@ class RequirementWorkflowServiceTest extends TestCase
         $requirement = Requirement::factory()->withProjects(2)->create([
             'status' => RequirementStatus::PENDING_REVIEW->value,
         ]);
-        $requirement->projectLinks()->first()->update([
-            'delivery_status' => ProjectDeliveryStatus::DEPLOYED,
-        ]);
+        $this->updateRequirementProjectForTest(
+            $requirement->projectLinks()->firstOrFail(),
+            [
+                'delivery_status' => ProjectDeliveryStatus::DEPLOYED,
+            ],
+        );
 
         $result = $this->service()->review(
             $requirement,
@@ -259,9 +265,11 @@ class RequirementWorkflowServiceTest extends TestCase
             'status' => RequirementStatus::PENDING_REVIEW->value,
         ]);
         $links = $requirement->projectLinks()->orderBy('id')->get();
-        $links->each->update([
-            'delivery_status' => ProjectDeliveryStatus::DEPLOYED,
-        ]);
+        foreach ($links as $link) {
+            $this->updateRequirementProjectForTest($link, [
+                'delivery_status' => ProjectDeliveryStatus::DEPLOYED,
+            ]);
+        }
         $this->failRequirementProjectWritesFor((int) $links->last()->project_id);
 
         try {
@@ -1100,8 +1108,23 @@ class RequirementWorkflowServiceTest extends TestCase
             }
 
             DB::connection()->rollBack();
-            $secondary->table('requirements')->where('id', $requirementId)->delete();
-            $secondary->table('users')->where('id', $userId)->delete();
+            $secondary->transaction(function () use (
+                $secondary,
+                $requirementId,
+                $userId,
+            ): void {
+                $linkIds = $secondary->table('requirement_project')
+                    ->where('requirement_id', $requirementId)
+                    ->pluck('id')
+                    ->map(static fn (mixed $id): int => (int) $id)
+                    ->all();
+                $secondary->select(
+                    "SELECT set_config('itpms.requirement_project_write_ids', ?, true)",
+                    [json_encode($linkIds, JSON_THROW_ON_ERROR)],
+                );
+                $secondary->table('requirements')->where('id', $requirementId)->delete();
+                $secondary->table('users')->where('id', $userId)->delete();
+            });
             DB::connection()->beginTransaction();
             DB::purge($connectionName);
         }

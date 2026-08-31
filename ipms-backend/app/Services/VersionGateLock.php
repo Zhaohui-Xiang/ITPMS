@@ -11,6 +11,8 @@ final class VersionGateLock
 {
     public const MUTATION_LOCKED_SQLSTATE = 'IV001';
 
+    public const SCOPE_BUSY_SQLSTATE = 'IV004';
+
     public function acquireScope(int $requirementId, int $projectId): void
     {
         $this->assertTransaction();
@@ -76,9 +78,155 @@ final class VersionGateLock
             ->each(fn (int $id): mixed => $this->acquire($id));
     }
 
+    public function runAuthorizedRequirementProjectInsert(
+        int $requirementId,
+        int $projectId,
+        callable $callback,
+    ): mixed {
+        $this->acquireScope($requirementId, $projectId);
+        $this->setRequirementProjectInsertScope($requirementId, $projectId);
+
+        try {
+            $result = $callback();
+        } catch (QueryException $exception) {
+            throw $exception;
+        } catch (\Throwable $exception) {
+            $this->clearRequirementProjectInsertScope();
+
+            throw $exception;
+        }
+
+        $this->clearRequirementProjectInsertScope();
+
+        return $result;
+    }
+
+    private function setRequirementProjectInsertScope(
+        int $requirementId,
+        int $projectId,
+    ): void {
+        $this->assertTransaction();
+
+        DB::select(
+            <<<'SQL'
+                SELECT set_config(
+                    'itpms.requirement_project_insert_scope',
+                    ?,
+                    true
+                )
+                SQL,
+            [json_encode([
+                'requirement_id' => $requirementId,
+                'project_id' => $projectId,
+            ], JSON_THROW_ON_ERROR)],
+        );
+    }
+
+    private function clearRequirementProjectInsertScope(): void
+    {
+        DB::select(
+            <<<'SQL'
+                SELECT set_config(
+                    'itpms.requirement_project_insert_scope',
+                    '',
+                    true
+                )
+                SQL,
+        );
+    }
+
+    /**
+     * Authorize only the already locked pivot rows for UPDATE or DELETE.
+     *
+     * @param  iterable<int>  $requirementProjectIds
+     */
+    public function authorizeRequirementProjectMutations(
+        iterable $requirementProjectIds,
+        ?int $releaseVersionId = null,
+        ?int $acceptanceVersionId = null,
+    ): void {
+        $this->assertTransaction();
+
+        $ids = collect($requirementProjectIds)
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+        $encodedIds = json_encode($ids, JSON_THROW_ON_ERROR);
+
+        DB::select(
+            <<<'SQL'
+                SELECT set_config(
+                    'itpms.requirement_project_write_ids',
+                    ?,
+                    true
+                )
+                SQL,
+            [$encodedIds],
+        );
+
+        DB::select(
+            <<<'SQL'
+                SELECT set_config(
+                    'itpms.release_project_version_id',
+                    ?,
+                    true
+                )
+                SQL,
+            [$releaseVersionId === null ? '' : (string) $releaseVersionId],
+        );
+        DB::select(
+            <<<'SQL'
+                SELECT set_config(
+                    'itpms.acceptance_project_version_id',
+                    ?,
+                    true
+                )
+                SQL,
+            [$acceptanceVersionId === null ? '' : (string) $acceptanceVersionId],
+        );
+    }
+
+    public function runAuthorizedRequirementProjectMutations(
+        iterable $requirementProjectIds,
+        callable $callback,
+        ?int $releaseVersionId = null,
+        ?int $acceptanceVersionId = null,
+    ): mixed {
+        $this->authorizeRequirementProjectMutations(
+            $requirementProjectIds,
+            $releaseVersionId,
+            $acceptanceVersionId,
+        );
+
+        try {
+            $result = $callback();
+        } catch (QueryException $exception) {
+            throw $exception;
+        } catch (\Throwable $exception) {
+            $this->authorizeRequirementProjectMutations([]);
+
+            throw $exception;
+        }
+
+        $this->authorizeRequirementProjectMutations([]);
+
+        return $result;
+    }
+
     public static function mutationConflict(QueryException $exception): ?DomainConflictException
     {
         $sqlState = $exception->errorInfo[0] ?? $exception->getCode();
+
+        if ($sqlState === self::SCOPE_BUSY_SQLSTATE) {
+            return new DomainConflictException(
+                'VERSION_SCOPE_BUSY',
+                errors: ['requirement_project' => ['reload_required']],
+                message: 'The requirement scope changed outside its controlled workflow. Reload and try again.',
+            );
+        }
 
         if ($sqlState !== self::MUTATION_LOCKED_SQLSTATE) {
             return null;

@@ -195,11 +195,14 @@ final class ProjectVersionService
                 return $target->fresh();
             }
 
-            $lockedLink->update([
-                'project_version_id' => $target->id,
-                'version_assigned_by_id' => $actor->id,
-                'version_assigned_at' => now(),
-            ]);
+            $this->versionGateLock->runAuthorizedRequirementProjectMutations(
+                [$lockedLink->id],
+                fn (): bool => $lockedLink->update([
+                    'project_version_id' => $target->id,
+                    'version_assigned_by_id' => $actor->id,
+                    'version_assigned_at' => now(),
+                ]),
+            );
 
             if ($oldVersion instanceof ProjectVersion && $oldVersion->id !== $target->id) {
                 $oldVersion->lock_version++;
@@ -267,11 +270,14 @@ final class ProjectVersionService
                 $this->assertReason($reason);
             }
 
-            $lockedLink->update([
-                'project_version_id' => null,
-                'version_assigned_by_id' => null,
-                'version_assigned_at' => null,
-            ]);
+            $this->versionGateLock->runAuthorizedRequirementProjectMutations(
+                [$lockedLink->id],
+                fn (): bool => $lockedLink->update([
+                    'project_version_id' => null,
+                    'version_assigned_by_id' => null,
+                    'version_assigned_at' => null,
+                ]),
+            );
 
             $target->lock_version++;
             $target->save();
