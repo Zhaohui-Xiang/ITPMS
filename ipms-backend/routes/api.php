@@ -1,18 +1,19 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\ApiDocumentController;
+use App\Http\Controllers\Api\AuditLogController;
 use App\Http\Controllers\Api\AuthController;
-use App\Http\Controllers\Api\ProjectController;
-use App\Http\Controllers\Api\RequirementController;
-use App\Http\Controllers\Api\TaskController;
+use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\DefectController;
 use App\Http\Controllers\Api\DocumentController;
-use App\Http\Controllers\Api\ApiDocumentController;
-use App\Http\Controllers\Api\OrganizationController;
-use App\Http\Controllers\Api\AuditLogController;
-use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\NotificationController;
-use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\OrganizationController;
+use App\Http\Controllers\Api\ProjectController;
+use App\Http\Controllers\Api\ProjectVersionController;
+use App\Http\Controllers\Api\RequirementController;
+use App\Http\Controllers\Api\TaskController;
+use App\Http\Controllers\Api\UserController;
+use Illuminate\Support\Facades\Route;
 
 /*
 |--------------------------------------------------------------------------
@@ -48,6 +49,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('projects')->group(function () {
         Route::get('/', [ProjectController::class, 'index']);
         Route::post('/', [ProjectController::class, 'store']);
+        Route::get('/{projectId}/versions', [ProjectVersionController::class, 'index'])->whereNumber('projectId');
+        Route::post('/{projectId}/versions', [ProjectVersionController::class, 'store'])->whereNumber('projectId');
         Route::get('/{id}', [ProjectController::class, 'show']);
         Route::put('/{id}', [ProjectController::class, 'update']);
         Route::delete('/{id}', [ProjectController::class, 'destroy']);
@@ -64,11 +67,26 @@ Route::middleware('auth:sanctum')->group(function () {
     });
 
     // ========================================================================
+    // Project release versions
+    // ========================================================================
+    Route::prefix('project-versions')->group(function () {
+        Route::post('/{id}/status', [ProjectVersionController::class, 'transition'])->whereNumber('id');
+        Route::get('/{id}/gate-check', [ProjectVersionController::class, 'gateCheck'])->whereNumber('id');
+        Route::post('/{id}/release', [ProjectVersionController::class, 'release'])->whereNumber('id');
+        Route::get('/{id}/history', [ProjectVersionController::class, 'history'])->whereNumber('id');
+        Route::get('/{id}', [ProjectVersionController::class, 'show'])->whereNumber('id');
+        Route::put('/{id}', [ProjectVersionController::class, 'update'])->whereNumber('id');
+        Route::delete('/{id}', [ProjectVersionController::class, 'destroy'])->whereNumber('id');
+    });
+
+    // ========================================================================
     // Requirements
     // ========================================================================
     Route::prefix('requirements')->group(function () {
         Route::get('/', [RequirementController::class, 'index']);
         Route::post('/', [RequirementController::class, 'store']);
+        Route::put('/{requirementId}/projects/{projectId}/version', [ProjectVersionController::class, 'assignRequirement'])->whereNumber(['requirementId', 'projectId']);
+        Route::delete('/{requirementId}/projects/{projectId}/version', [ProjectVersionController::class, 'unassignRequirement'])->whereNumber(['requirementId', 'projectId']);
         Route::get('/{id}', [RequirementController::class, 'show']);
         Route::put('/{id}', [RequirementController::class, 'update']);
         Route::post('/{id}/review', [RequirementController::class, 'review']);

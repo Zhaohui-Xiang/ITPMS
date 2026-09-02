@@ -41,8 +41,12 @@ class RequirementScope
     private static function forInternal(Builder $query, User $user): Builder
     {
         return $query->whereHas('projects', function ($q) use ($user) {
-            $q->whereHas('members', function ($sq) use ($user) {
-                $sq->where('user_id', $user->id);
+            $q->where(function ($projectQuery) use ($user) {
+                $projectQuery
+                    ->where('manager_id', $user->id)
+                    ->orWhereHas('members', function ($memberQuery) use ($user) {
+                        $memberQuery->where('user_id', $user->id);
+                    });
             });
         });
     }
@@ -56,6 +60,7 @@ class RequirementScope
         if (empty($orgIds)) {
             return $query->whereRaw('1 = 0');
         }
+
         return $query->whereHas('projects', function ($q) use ($orgIds) {
             $q->whereIn('supplier_org_id', $orgIds);
         });

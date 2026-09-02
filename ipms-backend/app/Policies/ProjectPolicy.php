@@ -18,9 +18,10 @@ class ProjectPolicy
         }
 
         return match ($user->user_type) {
-            UserType::INTERNAL->value => $project->members()
-                ->where('user_id', $user->id)
-                ->exists(),
+            UserType::INTERNAL->value => $project->manager_id === $user->id
+                || $project->members()
+                    ->where('user_id', $user->id)
+                    ->exists(),
             UserType::SUPPLIER->value => in_array(
                 $project->supplier_org_id,
                 $user->getSupplierDescendantOrgIds()

@@ -121,6 +121,7 @@ class ProjectVersionPolicyTest extends TestCase
             'status' => ProjectVersionStatus::DRAFT->value,
         ]);
 
+        $this->assertTrue($manager->can('view', $version));
         $this->assertTrue($manager->can('create', [ProjectVersion::class, $project]));
         $this->assertTrue($manager->can('update', $version));
         $this->assertTrue($manager->can('transition', $version));

@@ -9,13 +9,16 @@ use App\Http\Requests\ReviewRequirementRequest;
 use App\Http\Requests\StoreRequirementRequest;
 use App\Http\Requests\StoreTaskRequest;
 use App\Http\Requests\UpdateRequirementRequest;
+use App\Models\Project;
 use App\Models\Requirement;
 use App\Models\Task;
+use App\Scopes\ProjectScope;
 use App\Scopes\RequirementScope;
 use App\Services\RequirementWorkflowService;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 
 class RequirementController extends Controller
 {
@@ -31,11 +34,46 @@ class RequirementController extends Controller
     {
         $user = $request->user();
 
-        $query = Requirement::with([
+        $projectRules = [
+            $request->has('version_scope') ? 'required' : 'sometimes',
+            'integer',
+        ];
+        if ($request->input('version_scope') !== 'unplanned') {
+            $projectRules[] = 'exists:projects,id';
+        }
+
+        $validatedFilters = $request->validate([
+            'version_scope' => ['sometimes', 'in:unplanned'],
+            'project_id' => $projectRules,
+        ]);
+        $versionScope = $validatedFilters['version_scope'] ?? null;
+        $projectId = isset($validatedFilters['project_id'])
+            ? (int) $validatedFilters['project_id']
+            : null;
+
+        if ($projectId !== null) {
+            if ($versionScope === 'unplanned') {
+                ProjectScope::apply(Project::query(), $user)
+                    ->findOrFail($projectId);
+            } else {
+                $targetProject = Project::query()->findOrFail($projectId);
+                Gate::forUser($user)->authorize('view', $targetProject);
+            }
+        }
+
+        $relations = [
             'submitter:id,display_name,username',
             'reviewer:id,display_name,username',
-            'projects:id,name',
-        ]);
+        ];
+        if ($versionScope === 'unplanned') {
+            $relations['projects'] = static fn ($query) => $query
+                ->select(['projects.id', 'projects.name'])
+                ->where('projects.id', $projectId);
+        } else {
+            $relations[] = 'projects:id,name';
+        }
+
+        $query = Requirement::with($relations);
         $query = RequirementScope::apply($query, $user);
 
         // 按状态筛选
@@ -53,6 +91,15 @@ class RequirementController extends Controller
             $projectId = $request->integer('project_id');
             $query->whereHas('projects', function ($q) use ($projectId) {
                 $q->where('projects.id', $projectId);
+            });
+        }
+
+        if ($versionScope === 'unplanned') {
+            $projectId = $request->integer('project_id');
+            $query->whereHas('projectLinks', function ($q) use ($projectId) {
+                $q
+                    ->where('project_id', $projectId)
+                    ->whereNull('project_version_id');
             });
         }
 

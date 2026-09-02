@@ -40,8 +40,12 @@ class ProjectScope
      */
     private static function forInternal(Builder $query, User $user): Builder
     {
-        return $query->whereHas('members', function ($q) use ($user) {
-            $q->where('user_id', $user->id);
+        return $query->where(function ($projectQuery) use ($user) {
+            $projectQuery
+                ->where('manager_id', $user->id)
+                ->orWhereHas('members', function ($memberQuery) use ($user) {
+                    $memberQuery->where('user_id', $user->id);
+                });
         });
     }
 
@@ -54,6 +58,7 @@ class ProjectScope
         if (empty($orgIds)) {
             return $query->whereRaw('1 = 0');
         }
+
         return $query->whereIn('supplier_org_id', $orgIds);
     }
 
