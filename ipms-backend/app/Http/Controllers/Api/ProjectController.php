@@ -4,12 +4,14 @@ namespace App\Http\Controllers\Api;
 
 use App\Enums\ProjectStatus;
 use App\Enums\ProjectVersionStatus;
+use App\Enums\UserType;
 use App\Http\Controllers\Controller;
 use App\Http\Middleware\AuditLogger;
 use App\Http\Requests\StoreProjectRequest;
 use App\Http\Requests\UpdateProjectRequest;
 use App\Http\Resources\ProjectResource;
 use App\Models\Project;
+use App\Models\User;
 use App\Scopes\ProjectScope;
 use App\Support\ApiResponse;
 use Illuminate\Database\Eloquent\Builder;
@@ -22,7 +24,10 @@ final class ProjectController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $query = ProjectScope::apply($this->resourceQuery(), $request->user());
+        $query = ProjectScope::apply(
+            $this->resourceQuery($request->user()),
+            $request->user(),
+        );
 
         if ($request->has('status')) {
             $query->where('status', $request->integer('status'));
@@ -62,7 +67,7 @@ final class ProjectController extends Controller
 
             $this->audit($actor, $project, 1);
 
-            return $this->present($project);
+            return $this->present($project, $actor);
         });
 
         return ApiResponse::success(
@@ -74,7 +79,7 @@ final class ProjectController extends Controller
 
     public function show(Request $request, int $id): JsonResponse
     {
-        $project = $this->resourceQuery()->findOrFail($id);
+        $project = $this->resourceQuery($request->user())->findOrFail($id);
         Gate::forUser($request->user())->authorize('view', $project);
 
         return ApiResponse::success(
@@ -96,7 +101,7 @@ final class ProjectController extends Controller
             $locked->update($request->validated());
             $this->audit($actor, $locked, 2);
 
-            return $this->present($locked);
+            return $this->present($locked, $actor);
         });
 
         return ApiResponse::success(
@@ -147,7 +152,7 @@ final class ProjectController extends Controller
             $locked->update(['status' => ProjectStatus::ARCHIVED->value]);
             $this->audit($actor, $locked, 4);
 
-            return $this->present($locked);
+            return $this->present($locked, $actor);
         });
 
         return ApiResponse::success(
@@ -156,34 +161,63 @@ final class ProjectController extends Controller
         );
     }
 
-    private function resourceQuery(): Builder
+    private function resourceQuery(User $actor): Builder
     {
         $query = Project::query()
             ->with([
                 'manager:id,display_name',
                 'supplierOrg:id,name',
-            ])
-            ->withCount([
+            ]);
+
+        if ($actor->user_type === UserType::SYSTEM_USER->value) {
+            $requesterId = $actor->id;
+            $query->withCount([
+                'requirements' => fn (Builder $requirementQuery): Builder => $requirementQuery
+                    ->where('submitter_id', $requesterId),
+                'tasks' => fn (Builder $taskQuery): Builder => $taskQuery
+                    ->whereHas('requirement', fn (Builder $requirementQuery): Builder => $requirementQuery
+                        ->where('submitter_id', $requesterId)),
+                'defects' => fn (Builder $defectQuery): Builder => $defectQuery
+                    ->whereHas('requirement', fn (Builder $requirementQuery): Builder => $requirementQuery
+                        ->where('submitter_id', $requesterId)),
+                'versions' => fn (Builder $versionQuery): Builder => $versionQuery
+                    ->whereHas('requirementLinks.requirement', fn (Builder $requirementQuery): Builder => $requirementQuery
+                        ->where('submitter_id', $requesterId)),
+            ]);
+        } else {
+            $query->withCount([
                 'requirements',
                 'tasks',
                 'defects',
                 'versions',
             ]);
+        }
 
         foreach (ProjectVersionStatus::cases() as $status) {
             $alias = strtolower($status->name).'_versions_count';
             $query->withCount([
-                "versions as {$alias}" => fn (Builder $versionQuery): Builder => $versionQuery
-                    ->where('status', $status->value),
+                "versions as {$alias}" => function (Builder $versionQuery) use ($actor, $status): Builder {
+                    $versionQuery->where('status', $status->value);
+
+                    if ($actor->user_type === UserType::SYSTEM_USER->value) {
+                        $versionQuery->whereHas(
+                            'requirementLinks.requirement',
+                            fn (Builder $requirementQuery): Builder => $requirementQuery
+                                ->where('submitter_id', $actor->id),
+                        );
+                    }
+
+                    return $versionQuery;
+                },
             ]);
         }
 
         return $query;
     }
 
-    private function present(Project $project): Project
+    private function present(Project $project, User $actor): Project
     {
-        return $this->resourceQuery()->findOrFail($project->id);
+        return $this->resourceQuery($actor)->findOrFail($project->id);
     }
 
     private function audit(mixed $actor, Project $project, int $actionType): void

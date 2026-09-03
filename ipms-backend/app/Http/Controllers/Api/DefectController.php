@@ -12,6 +12,7 @@ use App\Http\Requests\VerifyDefectRequest;
 use App\Http\Resources\DefectResource;
 use App\Models\Defect;
 use App\Models\Project;
+use App\Models\Requirement;
 use App\Models\User;
 use App\Scopes\DefectScope;
 use App\Services\DefectWorkflowService;
@@ -60,9 +61,10 @@ final class DefectController extends Controller
     {
         $validated = $request->validated();
         $project = Project::query()->findOrFail((int) $validated['project_id']);
+        $requirement = Requirement::query()->findOrFail((int) $validated['requirement_id']);
         Gate::forUser($request->user())->authorize(
-            'createForProject',
-            [Defect::class, $project],
+            'createForRequirement',
+            [Defect::class, $requirement, $project],
         );
 
         $storedScreenshot = null;

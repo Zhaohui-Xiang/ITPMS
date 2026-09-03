@@ -75,8 +75,11 @@ class RolePermissionSeeder extends Seeder
         ]);
 
         // Requester (system user)
+        $this->revokePermissions($roles['requester'], [
+            'requirement.transition',
+        ]);
         $this->assignPermissions($roles['requester'], [
-            'requirement.create', 'requirement.edit', 'requirement.view', 'requirement.transition',
+            'requirement.create', 'requirement.edit', 'requirement.view',
             'defect.create', 'defect.view',
             'audit.view_scoped',
         ]);
@@ -142,5 +145,17 @@ class RolePermissionSeeder extends Seeder
                 'permission_id' => $permId,
             ]);
         }
+    }
+
+    private function revokePermissions(int $roleId, array $permCodes): void
+    {
+        $permIds = DB::table('permissions')
+            ->whereIn('code', $permCodes)
+            ->pluck('id');
+
+        DB::table('permission_role')
+            ->where('role_id', $roleId)
+            ->whereIn('permission_id', $permIds)
+            ->delete();
     }
 }

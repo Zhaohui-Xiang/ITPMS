@@ -13,6 +13,7 @@ use App\Models\Requirement;
 use App\Models\RequirementProject;
 use App\Models\User;
 use App\Services\DefectWorkflowService;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -219,6 +220,38 @@ class DefectWorkflowServiceTest extends TestCase
         $this->assertSame($reporter->id, $defect->created_by_id);
         $this->assertNotNull($defect->discovered_at);
         $this->assertDatabaseCount('audit_logs', 1);
+    }
+
+    public function test_system_requester_cannot_create_for_another_requesters_requirement(): void
+    {
+        $reporter = User::factory()->systemUser()->create();
+        $owner = User::factory()->systemUser()->create();
+        $requirement = Requirement::factory()->create([
+            'submitter_id' => $owner->id,
+            'created_by_id' => $owner->id,
+        ]);
+        $project = Project::factory()->create();
+        RequirementProject::factory()
+            ->for($requirement)
+            ->for($project)
+            ->create();
+
+        $this->expectException(AuthorizationException::class);
+
+        try {
+            $this->service()->create([
+                'requirement_id' => $requirement->id,
+                'project_id' => $project->id,
+                'title' => 'Cross requester defect',
+                'description' => 'Must not affect another requester.',
+                'severity' => 1,
+                'defect_type' => 2,
+                'discovery_phase' => 2,
+            ], $reporter);
+        } finally {
+            $this->assertDatabaseCount('defects', 0);
+            $this->assertDatabaseCount('audit_logs', 0);
+        }
     }
 
     public function test_create_rejects_a_project_outside_requirement_scope(): void

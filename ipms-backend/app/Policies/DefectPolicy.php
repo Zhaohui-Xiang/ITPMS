@@ -5,6 +5,7 @@ namespace App\Policies;
 use App\Enums\UserType;
 use App\Models\Defect;
 use App\Models\Project;
+use App\Models\Requirement;
 use App\Models\User;
 
 class DefectPolicy
@@ -37,6 +38,23 @@ class DefectPolicy
     {
         return $user->hasPermission('defect.create')
             && app(ProjectPolicy::class)->view($user, $project);
+    }
+
+    public function createForRequirement(
+        User $user,
+        Requirement $requirement,
+        Project $project,
+    ): bool {
+        if (! $this->createForProject($user, $project)) {
+            return false;
+        }
+
+        if ($user->user_type === UserType::SYSTEM_USER->value) {
+            return $requirement->submitter_id === $user->id;
+        }
+
+        // The workflow service validates the requirement-project relation.
+        return true;
     }
 
     public function update(User $user, Defect $defect): bool

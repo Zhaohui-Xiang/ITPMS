@@ -4,6 +4,7 @@ namespace App\Http\Requests;
 
 use App\Models\Defect;
 use App\Models\Project;
+use App\Models\Requirement;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\Gate;
 
@@ -20,12 +21,28 @@ class StoreDefectRequest extends FormRequest
             return false;
         }
 
+        $gate = Gate::forUser($this->user());
         $project = Project::query()->find($projectId);
+        if ($project === null) {
+            return false;
+        }
 
-        return $project !== null
-            && Gate::forUser($this->user())->allows(
+        if (! $this->has('requirement_id')) {
+            return $gate->allows(
                 'createForProject',
                 [Defect::class, $project],
+            );
+        }
+
+        $requirementId = $this->input('requirement_id');
+        $requirement = is_int($requirementId)
+            ? Requirement::query()->find($requirementId)
+            : null;
+
+        return $requirement !== null
+            && $gate->allows(
+                'createForRequirement',
+                [Defect::class, $requirement, $project],
             );
     }
 

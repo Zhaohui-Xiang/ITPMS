@@ -3,10 +3,13 @@
 namespace Tests\Feature\Api;
 
 use App\Enums\ProjectVersionStatus;
+use App\Models\Defect;
 use App\Models\Project;
 use App\Models\ProjectVersion;
 use App\Models\ProjectVersionHistory;
+use App\Models\Requirement;
 use App\Models\RequirementProject;
+use App\Models\Task;
 use App\Models\User;
 use Database\Seeders\PermissionSeeder;
 use Database\Seeders\RolePermissionSeeder;
@@ -623,6 +626,126 @@ final class ProjectVersionApiTest extends TestCase
                 ->pluck('metadata.sequence')
                 ->all(),
         );
+    }
+
+    public function test_requester_only_sees_versions_and_counts_for_own_requirements(): void
+    {
+        $manager = User::factory()->withRole('it_pm')->create();
+        $requester = User::factory()->withRole('requester')->create();
+        $otherRequester = User::factory()->withRole('requester')->create();
+        $superAdmin = User::factory()->superAdmin()->create();
+        $project = Project::factory()->withManager($manager)->create();
+        $sharedVersion = ProjectVersion::factory()
+            ->for($project)
+            ->inTesting()
+            ->create(['code' => 'OWN-SCOPE']);
+        $hiddenVersion = ProjectVersion::factory()->for($project)->create([
+            'code' => 'OTHER-SCOPE',
+        ]);
+        $ownRequirement = Requirement::factory()->create([
+            'title' => 'Requester visible requirement',
+            'submitter_id' => $requester->id,
+            'created_by_id' => $requester->id,
+        ]);
+        $otherSharedRequirement = Requirement::factory()->create([
+            'title' => 'Confidential shared version requirement',
+            'submitter_id' => $otherRequester->id,
+            'created_by_id' => $otherRequester->id,
+        ]);
+        $otherHiddenRequirement = Requirement::factory()->create([
+            'title' => 'Confidential hidden version requirement',
+            'submitter_id' => $otherRequester->id,
+            'created_by_id' => $otherRequester->id,
+        ]);
+
+        RequirementProject::factory()
+            ->for($ownRequirement)
+            ->forVersion($sharedVersion)
+            ->create();
+        RequirementProject::factory()
+            ->for($otherSharedRequirement)
+            ->forVersion($sharedVersion)
+            ->create();
+        RequirementProject::factory()
+            ->for($otherHiddenRequirement)
+            ->forVersion($hiddenVersion)
+            ->create();
+        Task::factory()->create([
+            'requirement_id' => $ownRequirement->id,
+            'project_id' => $project->id,
+        ]);
+        Task::factory()->create([
+            'requirement_id' => $otherSharedRequirement->id,
+            'project_id' => $project->id,
+        ]);
+        Defect::factory()->create([
+            'requirement_id' => $ownRequirement->id,
+            'project_id' => $project->id,
+        ]);
+        Defect::factory()->create([
+            'requirement_id' => $otherSharedRequirement->id,
+            'project_id' => $project->id,
+        ]);
+
+        $this->actingAs($superAdmin)
+            ->postJson("/api/project-versions/{$sharedVersion->id}/release", [
+                'lock_version' => 1,
+                'force' => true,
+                'force_reason' => 'Requester projection fixture',
+            ])
+            ->assertOk();
+
+        $this->actingAs($manager)
+            ->getJson("/api/project-versions/{$sharedVersion->id}")
+            ->assertOk()
+            ->assertJsonPath('data.counts.histories', 1)
+            ->assertJsonCount(1, 'data.history')
+            ->assertJsonPath('data.release_snapshot.is_override', true)
+            ->assertJsonPath(
+                'data.release_snapshot.override_reason',
+                'Requester projection fixture',
+            );
+
+        $this->actingAs($requester)
+            ->getJson("/api/projects/{$project->id}")
+            ->assertOk()
+            ->assertJsonPath('data.counts.requirements', 1)
+            ->assertJsonPath('data.counts.tasks', 1)
+            ->assertJsonPath('data.counts.defects', 1)
+            ->assertJsonPath('data.counts.versions', 1);
+
+        $this->actingAs($requester)
+            ->getJson("/api/projects/{$project->id}/versions")
+            ->assertOk()
+            ->assertJsonPath('data.total', 1)
+            ->assertJsonPath('data.items.0.id', $sharedVersion->id)
+            ->assertJsonPath('data.items.0.counts.requirements', 1)
+            ->assertJsonPath('data.items.0.counts.tasks', 1)
+            ->assertJsonPath('data.items.0.counts.defects', 1)
+            ->assertJsonPath('data.items.0.counts.histories', 0);
+
+        $this->actingAs($requester)
+            ->getJson("/api/project-versions/{$hiddenVersion->id}")
+            ->assertForbidden();
+
+        $detail = $this->actingAs($requester)
+            ->getJson("/api/project-versions/{$sharedVersion->id}")
+            ->assertOk()
+            ->assertJsonCount(1, 'data.scope')
+            ->assertJsonPath('data.scope.0.requirement_id', $ownRequirement->id)
+            ->assertJsonPath('data.gate_result', null)
+            ->assertJsonPath('data.release_snapshot', null)
+            ->assertJsonCount(0, 'data.history');
+        $detail->assertJsonMissing([
+            'title' => 'Confidential shared version requirement',
+        ]);
+
+        $this->actingAs($requester)
+            ->getJson("/api/project-versions/{$sharedVersion->id}/gate-check")
+            ->assertForbidden();
+        $this->actingAs($requester)
+            ->getJson("/api/project-versions/{$sharedVersion->id}/history")
+            ->assertForbidden();
     }
 
     public function test_release_version_routes_reject_non_numeric_identifiers(): void

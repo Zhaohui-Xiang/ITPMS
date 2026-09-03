@@ -70,7 +70,7 @@ class CoreAllowedActionsTest extends TestCase
     {
         $fixture = $this->fixture();
         $expected = [
-            'requester' => ['edit', 'transition_project'],
+            'requester' => ['edit'],
             'it_pm' => ['edit', 'transition_project', 'create_task'],
             'it_member' => ['edit', 'transition_project', 'create_task'],
             'supplier_pm' => ['transition_project', 'create_task'],
@@ -540,6 +540,69 @@ class CoreAllowedActionsTest extends TestCase
             ->assertJsonPath('error_code', 'FORBIDDEN');
 
         $this->assertNull($fixture['task']->refresh()->assignee_id);
+    }
+
+    public function test_requester_cannot_create_a_defect_for_another_requesters_requirement(): void
+    {
+        $fixture = $this->fixture();
+        $otherRequester = User::factory()->withRole('requester')->create();
+        $otherRequirement = Requirement::factory()->create([
+            'title' => 'Another requester requirement',
+            'submitter_id' => $otherRequester->id,
+            'created_by_id' => $otherRequester->id,
+        ]);
+        RequirementProject::factory()
+            ->for($otherRequirement)
+            ->for($fixture['project'])
+            ->create();
+        $payload = [
+            'project_id' => $fixture['project']->id,
+            'title' => 'Requester reported defect',
+            'description' => 'The requester may only report against their own requirement.',
+            'severity' => 1,
+            'defect_type' => 1,
+            'discovery_phase' => 2,
+        ];
+
+        $this->actingAs($fixture['requester'])
+            ->postJson('/api/defects', [
+                ...$payload,
+                'requirement_id' => $otherRequirement->id,
+            ])
+            ->assertForbidden()
+            ->assertJsonPath('error_code', 'FORBIDDEN');
+
+        $this->actingAs($fixture['requester'])
+            ->postJson('/api/defects', [
+                ...$payload,
+                'requirement_id' => $fixture['requirement']->id,
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.requirement.id', $fixture['requirement']->id);
+    }
+
+    public function test_requester_cannot_advance_project_delivery_status(): void
+    {
+        $fixture = $this->fixture();
+
+        $this->actingAs($fixture['requester'])
+            ->getJson("/api/requirements/{$fixture['requirement']->id}")
+            ->assertOk()
+            ->assertJsonPath('data.allowed_actions', ['edit']);
+
+        $this->actingAs($fixture['requester'])
+            ->postJson("/api/requirements/{$fixture['requirement']->id}/status", [
+                'project_id' => $fixture['project']->id,
+                'status' => ProjectDeliveryStatus::IN_DEVELOPMENT->value,
+            ])
+            ->assertForbidden()
+            ->assertJsonPath('error_code', 'FORBIDDEN');
+
+        $this->assertDatabaseHas('requirement_project', [
+            'requirement_id' => $fixture['requirement']->id,
+            'project_id' => $fixture['project']->id,
+            'delivery_status' => ProjectDeliveryStatus::ASSIGNED->value,
+        ]);
     }
 
     public function test_browser_multipart_defect_creation_normalizes_integer_fields(): void

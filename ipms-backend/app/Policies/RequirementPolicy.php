@@ -69,6 +69,10 @@ class RequirementPolicy
 
     public function transition(User $user, Requirement $requirement): bool
     {
+        if ($user->user_type === UserType::SYSTEM_USER->value) {
+            return false;
+        }
+
         return $user->hasPermission('requirement.transition')
             && $this->view($user, $requirement);
     }
@@ -78,6 +82,10 @@ class RequirementPolicy
         Requirement $requirement,
         Project $project,
     ): bool {
+        if ($user->user_type === UserType::SYSTEM_USER->value) {
+            return false;
+        }
+
         if (! $user->hasPermission('requirement.transition')) {
             return false;
         }
@@ -98,7 +106,7 @@ class RequirementPolicy
                 $user->getSupplierDescendantOrgIds(),
                 true,
             ),
-            UserType::SYSTEM_USER->value => $requirement->submitter_id === $user->id,
+            UserType::SYSTEM_USER->value => false,
             default => false,
         };
     }

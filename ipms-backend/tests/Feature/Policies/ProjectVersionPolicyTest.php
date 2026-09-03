@@ -100,6 +100,34 @@ class ProjectVersionPolicyTest extends TestCase
         $this->assertSame($nonVersionBefore, $this->permissionPivots(false));
     }
 
+    public function test_requester_deprecated_transition_permission_is_removed_on_rerun(): void
+    {
+        $requesterRoleId = DB::table('roles')
+            ->where('code', 'requester')
+            ->value('id');
+        $transitionPermissionId = DB::table('permissions')
+            ->where('code', 'requirement.transition')
+            ->value('id');
+
+        DB::table('permission_role')->insertOrIgnore([
+            'role_id' => $requesterRoleId,
+            'permission_id' => $transitionPermissionId,
+        ]);
+
+        $this->assertDatabaseHas('permission_role', [
+            'role_id' => $requesterRoleId,
+            'permission_id' => $transitionPermissionId,
+        ]);
+
+        $this->seed(RolePermissionSeeder::class);
+        $this->seed(RolePermissionSeeder::class);
+
+        $this->assertDatabaseMissing('permission_role', [
+            'role_id' => $requesterRoleId,
+            'permission_id' => $transitionPermissionId,
+        ]);
+    }
+
     public function test_auth_provider_and_all_policy_mappings_are_explicitly_loaded(): void
     {
         $this->assertTrue(app()->providerIsLoaded(AuthServiceProvider::class));
@@ -261,7 +289,7 @@ class ProjectVersionPolicyTest extends TestCase
         ]);
         RequirementProject::factory()
             ->for($requirement)
-            ->for($project)
+            ->forVersion($version)
             ->create();
 
         $this->assertTrue($internalParticipant->can('view', $version));

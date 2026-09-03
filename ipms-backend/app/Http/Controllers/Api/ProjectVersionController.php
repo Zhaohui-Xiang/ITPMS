@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Enums\ProjectVersionStatus;
+use App\Enums\UserType;
 use App\Exceptions\DomainConflictException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\AssignRequirementVersionRequest;
@@ -18,6 +19,7 @@ use App\Models\Project;
 use App\Models\ProjectVersion;
 use App\Models\RequirementProject;
 use App\Models\Task;
+use App\Models\User;
 use App\Services\ProjectReleaseService;
 use App\Services\ProjectVersionService;
 use App\Services\ReleaseGateService;
@@ -52,51 +54,66 @@ final class ProjectVersionController extends Controller
             'page_size' => ['sometimes', 'integer', 'min:1', 'max:100'],
         ]);
 
+        $actor = $request->user();
+        $isRequester = $actor->user_type === UserType::SYSTEM_USER->value;
         $query = ProjectVersion::query()
             ->select('project_versions.*')
             ->with([
                 'project:id,name,system_type,manager_id',
                 'owner:id,display_name',
-            ])
-            ->withCount(['requirementLinks', 'histories'])
-            ->selectSub(
-                Task::query()
-                    ->selectRaw('COUNT(*)')
-                    ->whereColumn('tasks.project_id', 'project_versions.project_id')
-                    ->whereExists(static function ($scope): void {
-                        $scope
-                            ->selectRaw('1')
-                            ->from('requirement_project')
-                            ->whereColumn(
-                                'requirement_project.requirement_id',
-                                'tasks.requirement_id',
-                            )
-                            ->whereColumn(
-                                'requirement_project.project_version_id',
-                                'project_versions.id',
-                            );
-                    }),
-                'scope_task_count',
-            )
-            ->selectSub(
-                Defect::query()
-                    ->selectRaw('COUNT(*)')
-                    ->whereColumn('defects.project_id', 'project_versions.project_id')
-                    ->whereExists(static function ($scope): void {
-                        $scope
-                            ->selectRaw('1')
-                            ->from('requirement_project')
-                            ->whereColumn(
-                                'requirement_project.requirement_id',
-                                'defects.requirement_id',
-                            )
-                            ->whereColumn(
-                                'requirement_project.project_version_id',
-                                'project_versions.id',
-                            );
-                    }),
-                'scope_defect_count',
-            )
+            ]);
+        $taskCountQuery = Task::query()
+            ->selectRaw('COUNT(*)')
+            ->whereColumn('tasks.project_id', 'project_versions.project_id')
+            ->whereExists(static function ($scope): void {
+                $scope
+                    ->selectRaw('1')
+                    ->from('requirement_project')
+                    ->whereColumn(
+                        'requirement_project.requirement_id',
+                        'tasks.requirement_id',
+                    )
+                    ->whereColumn(
+                        'requirement_project.project_version_id',
+                        'project_versions.id',
+                    );
+            });
+        $defectCountQuery = Defect::query()
+            ->selectRaw('COUNT(*)')
+            ->whereColumn('defects.project_id', 'project_versions.project_id')
+            ->whereExists(static function ($scope): void {
+                $scope
+                    ->selectRaw('1')
+                    ->from('requirement_project')
+                    ->whereColumn(
+                        'requirement_project.requirement_id',
+                        'defects.requirement_id',
+                    )
+                    ->whereColumn(
+                        'requirement_project.project_version_id',
+                        'project_versions.id',
+                    );
+            });
+
+        if ($isRequester) {
+            $ownedRequirement = fn ($requirementQuery) => $requirementQuery
+                ->where('submitter_id', $actor->id);
+            $query
+                ->whereHas('requirementLinks.requirement', $ownedRequirement)
+                ->withCount([
+                    'requirementLinks as requirement_links_count' => fn ($linkQuery) => $linkQuery
+                        ->whereHas('requirement', $ownedRequirement),
+                ])
+                ->selectRaw('0 AS histories_count');
+            $taskCountQuery->whereHas('requirement', $ownedRequirement);
+            $defectCountQuery->whereHas('requirement', $ownedRequirement);
+        } else {
+            $query->withCount(['requirementLinks', 'histories']);
+        }
+
+        $query
+            ->selectSub($taskCountQuery, 'scope_task_count')
+            ->selectSub($defectCountQuery, 'scope_defect_count')
             ->where('project_id', $project->id);
 
         if (isset($validated['status'])) {
@@ -155,7 +172,7 @@ final class ProjectVersionController extends Controller
         );
 
         return ApiResponse::success(
-            new ProjectVersionResource($this->present($version)),
+            new ProjectVersionResource($this->present($version, $request->user())),
             'Project version created.',
             201,
         );
@@ -167,7 +184,7 @@ final class ProjectVersionController extends Controller
         $this->authorizeVersionAccess($request, $version);
 
         return ApiResponse::success(
-            new ProjectVersionResource($this->present($version)),
+            new ProjectVersionResource($this->present($version, $request->user())),
         );
     }
 
@@ -187,7 +204,7 @@ final class ProjectVersionController extends Controller
         );
 
         return ApiResponse::success(
-            new ProjectVersionResource($this->present($version)),
+            new ProjectVersionResource($this->present($version, $request->user())),
             'Project version updated.',
         );
     }
@@ -230,7 +247,7 @@ final class ProjectVersionController extends Controller
         );
 
         return ApiResponse::success(
-            new ProjectVersionResource($this->present($version)),
+            new ProjectVersionResource($this->present($version, $request->user())),
             'Project version status updated.',
         );
     }
@@ -238,7 +255,7 @@ final class ProjectVersionController extends Controller
     public function gateCheck(Request $request, int $id): JsonResponse
     {
         $version = ProjectVersion::query()->findOrFail($id);
-        $this->authorizeVersionAccess($request, $version);
+        Gate::forUser($request->user())->authorize('viewGate', $version);
 
         $validated = $request->validate([
             'target_status' => ['sometimes', 'integer', Rule::in($this->statusValues())],
@@ -275,7 +292,7 @@ final class ProjectVersionController extends Controller
         );
 
         return ApiResponse::success(
-            new ProjectVersionResource($this->present($version)),
+            new ProjectVersionResource($this->present($version, $request->user())),
             $force ? 'Project version force released.' : 'Project version released.',
         );
     }
@@ -283,7 +300,7 @@ final class ProjectVersionController extends Controller
     public function history(Request $request, int $id): JsonResponse
     {
         $version = ProjectVersion::query()->findOrFail($id);
-        $this->authorizeVersionAccess($request, $version);
+        Gate::forUser($request->user())->authorize('viewHistory', $version);
         $validated = $request->validate([
             'page' => ['sometimes', 'integer', 'min:1'],
             'page_size' => ['sometimes', 'integer', 'min:1', 'max:100'],
@@ -374,9 +391,10 @@ final class ProjectVersionController extends Controller
 
     private function authorizeProjectAccess(Request $request, Project $project): void
     {
-        $probe = new ProjectVersion(['project_id' => $project->id]);
-        $probe->setRelation('project', $project);
-        Gate::forUser($request->user())->authorize('view', $probe);
+        Gate::forUser($request->user())->authorize(
+            'viewProject',
+            [ProjectVersion::class, $project],
+        );
     }
 
     private function authorizeVersionAccess(
@@ -432,20 +450,45 @@ final class ProjectVersionController extends Controller
         return $version;
     }
 
-    private function present(ProjectVersion $version): ProjectVersion
-    {
-        $version->load([
+    private function present(
+        ProjectVersion $version,
+        User $actor,
+    ): ProjectVersion {
+        $isRequester = $actor->user_type === UserType::SYSTEM_USER->value;
+        $relations = [
             'project:id,name,system_type,manager_id',
             'owner:id,display_name',
-            'requirementLinks' => static fn ($query) => $query->orderBy('id'),
-            'requirementLinks.requirement:id,title,status,priority',
-            'histories' => static fn ($query) => $query
-                ->orderByDesc('created_at')
-                ->orderByDesc('id')
-                ->limit(self::RECENT_HISTORY_LIMIT),
-            'histories.actor:id,display_name',
-            'releaseSnapshot.releasedBy:id,display_name',
-        ])->loadCount(['requirementLinks', 'histories']);
+        ];
+
+        if ($isRequester) {
+            $ownedRequirement = fn ($query) => $query
+                ->where('submitter_id', $actor->id);
+            $version->load([
+                ...$relations,
+                'requirementLinks' => fn ($query) => $query
+                    ->whereHas('requirement', $ownedRequirement)
+                    ->orderBy('id'),
+                'requirementLinks.requirement:id,title,status,priority',
+            ])->loadCount([
+                'requirementLinks as requirement_links_count' => fn ($query) => $query
+                    ->whereHas('requirement', $ownedRequirement),
+            ]);
+            $version->setAttribute('histories_count', 0);
+            $version->unsetRelation('histories');
+            $version->unsetRelation('releaseSnapshot');
+        } else {
+            $version->load([
+                ...$relations,
+                'requirementLinks' => static fn ($query) => $query->orderBy('id'),
+                'requirementLinks.requirement:id,title,status,priority',
+                'histories' => static fn ($query) => $query
+                    ->orderByDesc('created_at')
+                    ->orderByDesc('id')
+                    ->limit(self::RECENT_HISTORY_LIMIT),
+                'histories.actor:id,display_name',
+                'releaseSnapshot.releasedBy:id,display_name',
+            ])->loadCount(['requirementLinks', 'histories']);
+        }
 
         $requirementIds = $version->requirementLinks
             ->pluck('requirement_id')
@@ -465,16 +508,20 @@ final class ProjectVersionController extends Controller
                 ->whereIn('requirement_id', $requirementIds)
                 ->count();
 
-        $target = $this->defaultGateTarget($version->status);
-        $gate = $this->releaseGateService->check($version, $target);
-
         $version->setAttribute('scope_task_count', $taskCount);
         $version->setAttribute('scope_defect_count', $defectCount);
-        $version->setAttribute('gate_result', [
-            'target_status' => $target->value,
-            'target_status_code' => $target->name,
-            ...$gate->jsonSerialize(),
-        ]);
+
+        if ($isRequester) {
+            $version->setAttribute('gate_result', null);
+        } else {
+            $target = $this->defaultGateTarget($version->status);
+            $gate = $this->releaseGateService->check($version, $target);
+            $version->setAttribute('gate_result', [
+                'target_status' => $target->value,
+                'target_status_code' => $target->name,
+                ...$gate->jsonSerialize(),
+            ]);
+        }
 
         return $version;
     }

@@ -16,8 +16,43 @@ class ProjectVersionPolicy
             return true;
         }
 
+        if (! $user->hasPermission('project_version.view')) {
+            return false;
+        }
+
+        if ($user->user_type === UserType::SYSTEM_USER->value) {
+            return $version->requirementLinks()
+                ->whereHas(
+                    'requirement',
+                    fn ($requirementQuery) => $requirementQuery
+                        ->where('submitter_id', $user->id),
+                )
+                ->exists();
+        }
+
+        return app(ProjectPolicy::class)->view($user, $version->project);
+    }
+
+    public function viewProject(User $user, Project $project): bool
+    {
+        if ($user->isSuperAdmin()) {
+            return true;
+        }
+
         return $user->hasPermission('project_version.view')
-            && app(ProjectPolicy::class)->view($user, $version->project);
+            && app(ProjectPolicy::class)->view($user, $project);
+    }
+
+    public function viewGate(User $user, ProjectVersion $version): bool
+    {
+        return $user->user_type !== UserType::SYSTEM_USER->value
+            && $this->view($user, $version);
+    }
+
+    public function viewHistory(User $user, ProjectVersion $version): bool
+    {
+        return $user->user_type !== UserType::SYSTEM_USER->value
+            && $this->view($user, $version);
     }
 
     public function create(User $user, Project $project): bool

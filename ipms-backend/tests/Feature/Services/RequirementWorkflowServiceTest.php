@@ -1134,7 +1134,6 @@ class RequirementWorkflowServiceTest extends TestCase
     {
         $requester = $this->userWithPermission('requester', 'requirement.create');
         $this->grantRolePermission('requester', 'requirement.edit');
-        $this->grantRolePermission('requester', 'requirement.transition');
         $project = Project::factory()->create();
 
         $created = $this->actingAs($requester)
@@ -1154,6 +1153,7 @@ class RequirementWorkflowServiceTest extends TestCase
             ])->assertOk();
 
         $reviewer = $this->userWithPermission('it_pm', 'requirement.approve');
+        $this->grantRolePermission('it_pm', 'requirement.transition');
         DB::table('project_members')->insert([
             'project_id' => $project->id,
             'user_id' => $reviewer->id,
@@ -1165,7 +1165,7 @@ class RequirementWorkflowServiceTest extends TestCase
                 'action' => 'approve',
             ])->assertOk();
 
-        $this->actingAs($requester)
+        $this->actingAs($reviewer)
             ->postJson("/api/requirements/{$requirement->id}/status", [
                 'project_id' => $project->id,
                 'status' => ProjectDeliveryStatus::IN_DEVELOPMENT->value,

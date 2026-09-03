@@ -3,12 +3,15 @@
 namespace App\Services;
 
 use App\Enums\DefectStatus;
+use App\Enums\UserType;
 use App\Exceptions\DomainConflictException;
 use App\Http\Middleware\AuditLogger;
 use App\Models\Defect;
 use App\Models\Project;
+use App\Models\Requirement;
 use App\Models\RequirementProject;
 use App\Models\User;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -32,6 +35,7 @@ final class DefectWorkflowService
             $requirementId = (int) $data['requirement_id'];
             $projectId = (int) $data['project_id'];
             $this->assertRequirementProjectRelation($requirementId, $projectId);
+            $this->assertReporterOwnsRequirement($requirementId, $actor);
 
             $defect = Defect::query()->create([
                 ...Arr::only($data, self::WRITABLE_FIELDS),
@@ -214,6 +218,24 @@ final class DefectWorkflowService
             throw ValidationException::withMessages([
                 'project_id' => 'The project is not linked to this requirement.',
             ]);
+        }
+    }
+
+    private function assertReporterOwnsRequirement(
+        int $requirementId,
+        User $actor,
+    ): void {
+        if ($actor->user_type !== UserType::SYSTEM_USER->value) {
+            return;
+        }
+
+        $ownsRequirement = Requirement::query()
+            ->whereKey($requirementId)
+            ->where('submitter_id', $actor->id)
+            ->exists();
+
+        if (! $ownsRequirement) {
+            throw new AuthorizationException('Requesters may only report defects for their own requirements.');
         }
     }
 
