@@ -4,13 +4,22 @@
 
 // Element Plus 主色覆盖
 :root {
-  --el-color-primary: #409EFF;
-  --el-color-primary-light-3: #79bbff;
-  --el-color-primary-light-5: #a0cfff;
-  --el-color-primary-light-7: #c6e2ff;
-  --el-color-primary-light-8: #d9ecff;
-  --el-color-primary-light-9: #ecf5ff;
-  --el-color-primary-dark-2: #337ecc;
+  --el-color-primary: #{$color-primary};
+  --el-color-primary-light-3: #{$color-primary-hover};
+  --el-color-primary-light-5: #{$color-primary-soft};
+  --el-color-primary-light-7: #{$color-primary-soft};
+  --el-color-primary-light-8: #{$color-primary-soft};
+  --el-color-primary-light-9: #{$color-primary-soft};
+  --el-color-primary-dark-2: #{$color-primary};
+  --el-color-success: #{$color-success};
+  --el-color-warning: #{$color-warning};
+  --el-color-danger: #{$color-danger};
+  --el-text-color-primary: #{$color-ink};
+  --el-text-color-regular: #{$color-muted};
+  --el-text-color-secondary: #{$color-muted};
+  --el-bg-color-page: #{$color-canvas};
+  --el-border-color: #{$color-border};
+  --el-border-radius-base: #{$border-radius-md};
 }
 
 * {
@@ -23,8 +32,8 @@ html, body {
   height: 100%;
   font-family: $font-family-base;
   font-size: $font-size-body;
-  color: $gray-900;
-  background-color: #F5F7FA;
+  color: $color-ink;
+  background-color: $color-canvas;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -270,7 +279,7 @@ html, body {
     font-size: $font-size-h1;
     font-weight: 600;
     line-height: 32px;
-    color: $gray-900;
+    color: $color-ink;
   }
 
   .page-description {
@@ -537,17 +546,17 @@ html, body {
 
 // 表格行 hover
 .el-table {
-  --el-table-row-hover-bg-color: #F8F9FF;
+  --el-table-row-hover-bg-color: #{$color-primary-soft};
 }
 
 // 分页器
 .el-pagination {
-  --el-pagination-button-bg-color: #f4f4f5;
+  --el-pagination-button-bg-color: #{$color-canvas};
 }
 
 // 对话框样式
 .el-dialog {
-  --el-dialog-border-radius: 12px;
+  --el-dialog-border-radius: #{$border-radius-md};
 
   .el-dialog__header {
     padding: 20px 24px 0;
@@ -570,7 +579,7 @@ html, body {
 
 // 卡片
 .el-card {
-  --el-card-border-radius: 8px;
+  --el-card-border-radius: #{$border-radius-md};
 }
 
 // 标签
@@ -580,7 +589,7 @@ html, body {
 
 // 消息提示
 .el-message {
-  --el-message-border-radius: 8px;
+  --el-message-border-radius: #{$border-radius-md};
   --el-message-padding: 12px 20px;
 }
 

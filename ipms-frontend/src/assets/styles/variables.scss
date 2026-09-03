@@ -3,20 +3,26 @@
 // ================================================================
 
 // 主色
-$--el-color-primary: #409EFF;
 
 // 主色色阶（Element Plus 使用 CSS 变量，此处定义 SCSS 映射供参考）
-$color-primary: #409EFF;
-$color-primary-light: #66b1ff;
-$color-primary-lighter: #a0cfff;
-$color-primary-lightest: #d9ecff;
-$color-primary-dark: #3a8ee6;
+$color-primary: #00467f;
+$color-primary-hover: #075b9a;
+$color-primary-soft: #e9f3fb;
+$color-ink: #17212b;
+$color-muted: #667482;
+$color-canvas: #f4f7fa;
+$color-border: #d9e1e8;
+$--el-color-primary: $color-primary;
+$color-primary-light: $color-primary-hover;
+$color-primary-lighter: $color-primary-soft;
+$color-primary-lightest: $color-primary-soft;
+$color-primary-dark: $color-primary;
 
 // 功能色
-$color-success: #67C23A;
-$color-warning: #E6A23C;
-$color-danger: #F56C6C;
-$color-info: #909399;
+$color-success: #2f7d4a;
+$color-warning: #a86408;
+$color-danger: #c43d3d;
+$color-info: $color-muted;
 
 // 缺陷严重程度
 $color-critical: #F56C6C;    // 致命
@@ -48,16 +54,16 @@ $defect-closed: #67C23A;
 $defect-reopened: #F56C6C;
 
 // 中性色
-$gray-50: #FAFAFA;
+$gray-50: $color-canvas;
 $gray-100: #F5F5F5;
 $gray-200: #EEEEEE;
 $gray-300: #E0E0E0;
-$gray-500: #9E9E9E;
-$gray-700: #616161;
-$gray-900: #212121;
+$gray-500: $color-muted;
+$gray-700: $color-muted;
+$gray-900: $color-ink;
 
 // 布局尺寸
-$sidebar-width: 220px;
+$sidebar-width: 208px;
 $sidebar-collapsed-width: 64px;
 $header-height: 56px;
 $footer-height: 32px;
@@ -66,7 +72,7 @@ $content-max-width: 1400px;
 // 圆角
 $border-radius-sm: 4px;
 $border-radius-md: 8px;
-$border-radius-lg: 12px;
+$border-radius-lg: $border-radius-md;
 $border-radius-round: 20px;
 
 // 字体
