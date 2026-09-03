@@ -3,228 +3,200 @@
 namespace App\Http\Controllers\Api;
 
 use App\Enums\ProjectStatus;
+use App\Enums\ProjectVersionStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Middleware\AuditLogger;
 use App\Http\Requests\StoreProjectRequest;
 use App\Http\Requests\UpdateProjectRequest;
+use App\Http\Resources\ProjectResource;
 use App\Models\Project;
-use App\Support\ApiResponse;
 use App\Scopes\ProjectScope;
+use App\Support\ApiResponse;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 
-class ProjectController extends Controller
+final class ProjectController extends Controller
 {
-    /**
-     * 项目列表（权限过滤 + 分页）
-     * GET /api/projects
-     */
     public function index(Request $request): JsonResponse
     {
-        $user = $request->user();
+        $query = ProjectScope::apply($this->resourceQuery(), $request->user());
 
-        $query = Project::with(['manager:id,display_name,username', 'supplierOrg:id,name']);
-        $query = ProjectScope::apply($query, $user);
-
-        // 按状态筛选
         if ($request->has('status')) {
             $query->where('status', $request->integer('status'));
         }
 
-        // 搜索项目名称
         if ($request->has('keyword')) {
-            $query->where('name', 'like', '%' . $request->input('keyword') . '%');
+            $query->where('name', 'like', '%'.$request->input('keyword').'%');
         }
 
         $pageSize = min(max($request->integer('page_size', 20), 1), 100);
-        $paginator = $query->orderBy('updated_at', 'desc')->paginate($pageSize);
+        $paginator = $query->orderByDesc('updated_at')->paginate($pageSize);
 
-        return ApiResponse::paginated($paginator);
+        return ApiResponse::paginated(
+            $paginator,
+            fn (Project $project): array => (new ProjectResource($project))->resolve($request),
+        );
     }
 
-    /**
-     * 创建项目（仅超管）
-     * POST /api/projects
-     */
     public function store(StoreProjectRequest $request): JsonResponse
     {
-        $user = $request->user();
+        $validated = $request->validated();
+        $actor = $request->user();
 
-        $project = Project::create([
-            'name' => $request->input('name'),
-            'system_type' => $request->input('system_type'),
-            'description' => $request->input('description'),
-            'status' => $request->integer('status', ProjectStatus::ACTIVE->value),
-            'manager_id' => $request->input('manager_id'),
-            'supplier_org_id' => $request->input('supplier_org_id'),
-            'created_by_id' => $user->id,
-        ]);
+        $project = DB::transaction(function () use ($validated, $actor): Project {
+            $project = Project::query()->create([
+                ...$validated,
+                'status' => $validated['status'] ?? ProjectStatus::ACTIVE->value,
+                'created_by_id' => $actor->id,
+            ]);
 
-        // 将创建人自动添加为项目成员
-        $project->members()->create([
-            'user_id' => $user->id,
-            'role_in_project' => 'pm',
-            'assigned_by_id' => $user->id,
-            'assigned_at' => now(),
-        ]);
+            $project->members()->create([
+                'user_id' => $actor->id,
+                'role_in_project' => 'pm',
+                'assigned_by_id' => $actor->id,
+                'assigned_at' => now(),
+            ]);
 
-        // 操作日志
-        AuditLogger::log($user->id, [
-            'user_name' => $user->username,
-            'user_display_name' => $user->display_name,
-            'user_type' => $user->user_type,
-            'module' => 'project',
-            'action_type' => 'create',
-            'target_type' => 'project',
-            'target_id' => $project->id,
-            'target_name' => $project->name,
-        ]);
+            $this->audit($actor, $project, 1);
 
-        return response()->json([
-            'code' => 200,
-            'message' => '项目创建成功',
-            'data' => $project->load(['manager:id,display_name', 'supplierOrg:id,name']),
-        ], 201);
+            return $this->present($project);
+        });
+
+        return ApiResponse::success(
+            (new ProjectResource($project))->resolve($request),
+            'Project created.',
+            201,
+        );
     }
 
-    /**
-     * 项目详情
-     * GET /api/projects/{id}
-     */
     public function show(Request $request, int $id): JsonResponse
     {
-        $user = $request->user();
-        $project = Project::with([
-            'manager:id,display_name,username',
-            'supplierOrg:id,name',
-            'creator:id,display_name',
-            'members.user:id,display_name,username,user_type',
-        ])->findOrFail($id);
+        $project = $this->resourceQuery()->findOrFail($id);
+        Gate::forUser($request->user())->authorize('view', $project);
 
-        // 行级权限检查
-        if (!$user->can('view', $project)) {
-            return response()->json(['code' => 403, 'message' => '您无权查看该项目'], 403);
-        }
-
-        // 附加统计信息
-        $project->requirement_count = $project->requirements()->count();
-        $project->task_count = $project->tasks()->count();
-        $project->defect_count = $project->defects()->count();
-
-        return response()->json([
-            'code' => 200,
-            'message' => 'success',
-            'data' => $project,
-        ]);
+        return ApiResponse::success(
+            (new ProjectResource($project))->resolve($request),
+        );
     }
 
-    /**
-     * 编辑项目（仅超管）
-     * PUT /api/projects/{id}
-     */
     public function update(UpdateProjectRequest $request, int $id): JsonResponse
     {
-        $user = $request->user();
-        $project = Project::findOrFail($id);
+        $project = Project::query()->findOrFail($id);
+        Gate::forUser($request->user())->authorize('update', $project);
+        $actor = $request->user();
 
-        $project->update($request->only([
-            'name', 'system_type', 'description', 'status', 'manager_id', 'supplier_org_id',
-        ]));
+        $project = DB::transaction(function () use ($project, $request, $actor): Project {
+            $locked = Project::query()
+                ->whereKey($project->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            $locked->update($request->validated());
+            $this->audit($actor, $locked, 2);
 
-        // 操作日志
-        AuditLogger::log($user->id, [
-            'user_name' => $user->username,
-            'user_display_name' => $user->display_name,
-            'user_type' => $user->user_type,
-            'module' => 'project',
-            'action_type' => 'update',
-            'target_type' => 'project',
-            'target_id' => $project->id,
-            'target_name' => $project->name,
-        ]);
+            return $this->present($locked);
+        });
 
-        return response()->json([
-            'code' => 200,
-            'message' => '项目更新成功',
-            'data' => $project->load(['manager:id,display_name', 'supplierOrg:id,name']),
-        ]);
+        return ApiResponse::success(
+            (new ProjectResource($project))->resolve($request),
+            'Project updated.',
+        );
     }
 
-    /**
-     * 删除项目（检查关联需求，有则禁止）
-     * DELETE /api/projects/{id}
-     */
     public function destroy(Request $request, int $id): JsonResponse
     {
-        $user = $request->user();
-        $project = Project::findOrFail($id);
+        $project = Project::query()->findOrFail($id);
+        Gate::forUser($request->user())->authorize('delete', $project);
 
-        // 权限检查
-        if (!$user->can('delete', $project)) {
-            return response()->json(['code' => 403, 'message' => '仅超级管理员可以删除项目'], 403);
-        }
-
-        // 检查是否关联需求
         $requirementCount = $project->requirements()->count();
         if ($requirementCount > 0) {
-            return response()->json([
-                'code' => 422,
-                'message' => "该项目已关联 {$requirementCount} 条需求，无法删除。如需移除，请先将关联的需求移动至其他项目或删除。",
-            ], 422);
+            return ApiResponse::error(
+                'PROJECT_HAS_REQUIREMENTS',
+                'The project still has linked requirements.',
+                409,
+                ['requirements' => ['count' => $requirementCount]],
+            );
         }
 
-        $projectName = $project->name;
-        $project->delete();
+        $actor = $request->user();
+        DB::transaction(function () use ($project, $actor): void {
+            $locked = Project::query()
+                ->whereKey($project->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            $this->audit($actor, $locked, 3);
+            $locked->delete();
+        });
 
-        // 操作日志
-        AuditLogger::log($user->id, [
-            'user_name' => $user->username,
-            'user_display_name' => $user->display_name,
-            'user_type' => $user->user_type,
-            'module' => 'project',
-            'action_type' => 'delete',
-            'target_type' => 'project',
-            'target_id' => $id,
-            'target_name' => $projectName,
-        ]);
-
-        return response()->json([
-            'code' => 200,
-            'message' => '项目已删除',
-        ]);
+        return ApiResponse::success(message: 'Project deleted.');
     }
 
-    /**
-     * 归档项目
-     * POST /api/projects/{id}/archive
-     */
     public function archive(Request $request, int $id): JsonResponse
     {
-        $user = $request->user();
-        $project = Project::findOrFail($id);
+        $project = Project::query()->findOrFail($id);
+        Gate::forUser($request->user())->authorize('archive', $project);
+        $actor = $request->user();
 
-        if (!$user->can('update', $project)) {
-            return response()->json(['code' => 403, 'message' => '仅超级管理员可以归档项目'], 403);
+        $project = DB::transaction(function () use ($project, $actor): Project {
+            $locked = Project::query()
+                ->whereKey($project->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+            $locked->update(['status' => ProjectStatus::ARCHIVED->value]);
+            $this->audit($actor, $locked, 4);
+
+            return $this->present($locked);
+        });
+
+        return ApiResponse::success(
+            (new ProjectResource($project))->resolve($request),
+            'Project archived.',
+        );
+    }
+
+    private function resourceQuery(): Builder
+    {
+        $query = Project::query()
+            ->with([
+                'manager:id,display_name',
+                'supplierOrg:id,name',
+            ])
+            ->withCount([
+                'requirements',
+                'tasks',
+                'defects',
+                'versions',
+            ]);
+
+        foreach (ProjectVersionStatus::cases() as $status) {
+            $alias = strtolower($status->name).'_versions_count';
+            $query->withCount([
+                "versions as {$alias}" => fn (Builder $versionQuery): Builder => $versionQuery
+                    ->where('status', $status->value),
+            ]);
         }
 
-        $project->update(['status' => ProjectStatus::ARCHIVED->value]);
+        return $query;
+    }
 
-        // 操作日志
-        AuditLogger::log($user->id, [
-            'user_name' => $user->username,
-            'user_display_name' => $user->display_name,
-            'user_type' => $user->user_type,
-            'module' => 'project',
-            'action_type' => 'archive',
+    private function present(Project $project): Project
+    {
+        return $this->resourceQuery()->findOrFail($project->id);
+    }
+
+    private function audit(mixed $actor, Project $project, int $actionType): void
+    {
+        AuditLogger::log($actor->id, [
+            'user_name' => $actor->username,
+            'user_display_name' => $actor->display_name,
+            'user_type' => $actor->user_type,
+            'module' => 1,
+            'action_type' => $actionType,
             'target_type' => 'project',
             'target_id' => $project->id,
             'target_name' => $project->name,
-        ]);
-
-        return response()->json([
-            'code' => 200,
-            'message' => '项目已归档',
-            'data' => $project,
         ]);
     }
 }

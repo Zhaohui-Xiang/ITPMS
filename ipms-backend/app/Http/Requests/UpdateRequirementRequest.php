@@ -2,13 +2,18 @@
 
 namespace App\Http\Requests;
 
+use App\Models\Requirement;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Support\Facades\Gate;
 
 class UpdateRequirementRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user()->hasPermission('requirement.edit');
+        $requirement = Requirement::query()->find($this->route('id'));
+
+        return $requirement !== null
+            && Gate::forUser($this->user())->allows('update', $requirement);
     }
 
     public function rules(): array

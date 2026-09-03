@@ -2,24 +2,66 @@
 
 namespace App\Http\Requests;
 
+use App\Models\Defect;
+use App\Models\Project;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Support\Facades\Gate;
 
 class StoreDefectRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user()->hasPermission('defect.create');
+        if (! $this->has('project_id')) {
+            return $this->user()->hasPermission('defect.create');
+        }
+
+        $projectId = $this->input('project_id');
+        if (! is_int($projectId)) {
+            return false;
+        }
+
+        $project = Project::query()->find($projectId);
+
+        return $project !== null
+            && Gate::forUser($this->user())->allows(
+                'createForProject',
+                [Defect::class, $project],
+            );
+    }
+
+    protected function prepareForValidation(): void
+    {
+        if ($this->isJson()) {
+            return;
+        }
+
+        $normalized = [];
+        foreach ([
+            'requirement_id',
+            'project_id',
+            'severity',
+            'defect_type',
+            'discovery_phase',
+        ] as $field) {
+            $value = $this->input($field);
+            if (is_string($value) && preg_match('/^[1-9]\d*$/D', $value) === 1) {
+                $normalized[$field] = (int) $value;
+            }
+        }
+
+        $this->merge($normalized);
     }
 
     public function rules(): array
     {
         return [
-            'requirement_id' => ['required', 'integer', 'exists:requirements,id'],
+            'requirement_id' => ['required', 'integer:strict', 'exists:requirements,id'],
+            'project_id' => ['required', 'integer:strict', 'exists:projects,id'],
             'title' => ['required', 'string', 'max:200'],
-            'description' => ['required', 'string'],
-            'severity' => ['required', 'integer', 'in:1,2,3,4'],
-            'defect_type' => ['required', 'integer', 'in:1,2,3,4,5'],
-            'discovery_phase' => ['required', 'integer', 'in:1,2'],
+            'description' => ['required', 'string', 'max:5000'],
+            'severity' => ['required', 'integer:strict', 'in:1,2,3,4'],
+            'defect_type' => ['required', 'integer:strict', 'in:1,2,3,4,5'],
+            'discovery_phase' => ['required', 'integer:strict', 'in:1,2'],
             'screenshot' => ['nullable', 'image', 'max:5120'],
         ];
     }
@@ -29,6 +71,8 @@ class StoreDefectRequest extends FormRequest
         return [
             'requirement_id.required' => '必须关联一条需求',
             'requirement_id.exists' => '关联的需求不存在',
+            'project_id.required' => '必须关联一个项目',
+            'project_id.exists' => '关联的项目不存在',
             'title.required' => '缺陷标题不能为空',
             'title.max' => '缺陷标题不能超过200个字符',
             'description.required' => '缺陷描述不能为空',

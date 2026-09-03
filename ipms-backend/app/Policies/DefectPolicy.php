@@ -4,13 +4,11 @@ namespace App\Policies;
 
 use App\Enums\UserType;
 use App\Models\Defect;
+use App\Models\Project;
 use App\Models\User;
 
 class DefectPolicy
 {
-    /**
-     * 查看缺陷详情（行级权限检查）
-     */
     public function view(User $user, Defect $defect): bool
     {
         if ($user->isSuperAdmin()) {
@@ -18,67 +16,94 @@ class DefectPolicy
         }
 
         return match ($user->user_type) {
-            UserType::INTERNAL->value => $defect->project()
-                ->whereHas('members', fn ($q) => $q->where('user_id', $user->id))
-                ->exists(),
-            UserType::SUPPLIER->value => $defect->project()
-                ->whereIn('supplier_org_id', $user->getSupplierDescendantOrgIds())
-                ->exists(),
-            UserType::SYSTEM_USER->value => $defect->requirement()
-                ->where('submitter_id', $user->id)
-                ->exists(),
+            UserType::INTERNAL->value => $defect->project->manager_id === $user->id
+                || $defect->project->members()->where('user_id', $user->id)->exists(),
+            UserType::SUPPLIER->value => in_array(
+                $defect->project->supplier_org_id,
+                $user->getSupplierDescendantOrgIds(),
+                true,
+            ),
+            UserType::SYSTEM_USER->value => $defect->requirement->submitter_id === $user->id,
             default => false,
         };
     }
 
-    /**
-     * 提交缺陷
-     */
     public function create(User $user): bool
     {
         return $user->hasPermission('defect.create');
     }
 
-    /**
-     * 编辑缺陷
-     */
+    public function createForProject(User $user, Project $project): bool
+    {
+        return $user->hasPermission('defect.create')
+            && app(ProjectPolicy::class)->view($user, $project);
+    }
+
     public function update(User $user, Defect $defect): bool
     {
-        if (!$user->hasPermission('defect.edit')) {
-            return false;
-        }
-        return $this->view($user, $defect);
+        return ($user->isSuperAdmin() || $user->hasPermission('defect.edit'))
+            && $this->view($user, $defect);
     }
 
-    /**
-     * 确认缺陷
-     */
     public function confirm(User $user, Defect $defect): bool
     {
-        return $user->hasPermission('defect.confirm');
+        return $user->isSuperAdmin()
+            || (
+                $this->hasRole($user, 'it_pm')
+                && $user->hasPermission('defect.confirm')
+                && $defect->project->manager_id === $user->id
+            );
     }
 
-    /**
-     * 指派修复
-     */
     public function assign(User $user, Defect $defect): bool
     {
-        return $user->hasPermission('defect.assign');
+        if ($user->isSuperAdmin()) {
+            return true;
+        }
+
+        if ($this->hasRole($user, 'it_pm')
+            && $user->hasPermission('defect.assign')
+            && $defect->project->manager_id === $user->id) {
+            return true;
+        }
+
+        return $this->hasRole($user, 'supplier_pm')
+            && $user->hasPermission('defect.assign')
+            && in_array(
+                $defect->project->supplier_org_id,
+                $user->getSupplierDescendantOrgIds(),
+                true,
+            );
     }
 
-    /**
-     * 标记修复完成
-     */
     public function resolve(User $user, Defect $defect): bool
     {
-        return $user->hasPermission('defect.resolve');
+        return $this->hasRole($user, 'supplier_dev')
+            && $user->hasPermission('defect.fix')
+            && $defect->assignee_id === $user->id
+            && $this->view($user, $defect);
     }
 
-    /**
-     * 复测
-     */
     public function verify(User $user, Defect $defect): bool
     {
-        return $user->hasPermission('defect.verify');
+        return $user->isSuperAdmin()
+            || (
+                $this->hasRole($user, 'supplier_tester')
+                && $user->hasPermission('defect.retest')
+                && $defect->project->members()
+                    ->where('user_id', $user->id)
+                    ->exists()
+                && $this->view($user, $defect)
+            );
+    }
+
+    public function reopen(User $user, Defect $defect): bool
+    {
+        return $this->verify($user, $defect);
+    }
+
+    private function hasRole(User $user, string $role): bool
+    {
+        return $user->roles()->where('code', $role)->exists();
     }
 }

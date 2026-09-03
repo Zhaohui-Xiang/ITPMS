@@ -4,311 +4,165 @@ namespace App\Http\Controllers\Api;
 
 use App\Enums\TaskStatus;
 use App\Http\Controllers\Controller;
-use App\Http\Middleware\AuditLogger;
+use App\Http\Requests\HoldTaskRequest;
 use App\Http\Requests\StoreTaskRequest;
+use App\Http\Requests\TransitionTaskRequest;
 use App\Http\Requests\UpdateTaskRequest;
+use App\Http\Resources\TaskResource;
+use App\Models\Project;
 use App\Models\Task;
-use App\Support\ApiResponse;
 use App\Scopes\TaskScope;
+use App\Services\TaskWorkflowService;
+use App\Support\ApiResponse;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 
-class TaskController extends Controller
+final class TaskController extends Controller
 {
-    /**
-     * 任务列表（权限过滤 + 筛选 + 分页）
-     * GET /api/tasks
-     */
+    public function __construct(
+        private readonly TaskWorkflowService $workflow,
+    ) {}
+
     public function index(Request $request): JsonResponse
     {
-        $user = $request->user();
+        $query = TaskScope::apply($this->resourceQuery(), $request->user());
 
-        $query = Task::with([
-            'assignee:id,display_name,username',
-            'requirement:id,title',
-            'project:id,name',
-            'creator:id,display_name',
-        ]);
-        $query = TaskScope::apply($query, $user);
-
-        // 按状态筛选
         if ($request->has('status')) {
             $query->where('status', $request->integer('status'));
         }
-
-        // 按优先级筛选
         if ($request->has('priority')) {
             $query->where('priority', $request->integer('priority'));
         }
-
-        // 按项目筛选
         if ($request->has('project_id')) {
             $query->where('project_id', $request->integer('project_id'));
         }
-
-        // 按需求筛选
         if ($request->has('requirement_id')) {
             $query->where('requirement_id', $request->integer('requirement_id'));
         }
-
-        // 按负责人筛选
         if ($request->has('assignee_id')) {
             $query->where('assignee_id', $request->integer('assignee_id'));
         }
-
-        // 搜索标题
         if ($request->has('keyword')) {
-            $query->where('title', 'like', '%' . $request->input('keyword') . '%');
+            $query->where('title', 'like', '%'.$request->input('keyword').'%');
         }
 
         $pageSize = min(max($request->integer('page_size', 20), 1), 100);
-        $paginator = $query->orderBy('due_date', 'asc')
-            ->orderBy('priority', 'asc')
+        $paginator = $query
+            ->orderBy('due_date')
+            ->orderBy('priority')
             ->paginate($pageSize);
 
-        return ApiResponse::paginated($paginator);
+        return ApiResponse::paginated(
+            $paginator,
+            fn (Task $task): array => (new TaskResource($task))->resolve($request),
+        );
     }
 
-    /**
-     * 创建任务
-     * POST /api/tasks
-     */
     public function store(StoreTaskRequest $request): JsonResponse
     {
-        $user = $request->user();
+        $validated = $request->validated();
+        $project = Project::query()->findOrFail((int) $validated['project_id']);
+        Gate::forUser($request->user())->authorize(
+            'createForProject',
+            [Task::class, $project],
+        );
 
-        $task = Task::create([
-            'requirement_id' => $request->input('requirement_id'),
-            'project_id' => $request->input('project_id'),
-            'title' => $request->input('title'),
-            'description' => $request->input('description'),
-            'assignee_id' => $request->input('assignee_id'),
-            'priority' => $request->input('priority'),
-            'due_date' => $request->input('due_date'),
-            'remind_days_before' => $request->integer('remind_days_before', 1),
-            'estimated_hours' => $request->input('estimated_hours'),
-            'status' => TaskStatus::TODO->value,
-            'created_by_id' => $user->id,
-        ]);
+        $task = $this->workflow->create($validated, $request->user());
 
-        // 操作日志
-        AuditLogger::log($user->id, [
-            'user_name' => $user->username,
-            'user_display_name' => $user->display_name,
-            'user_type' => $user->user_type,
-            'module' => 'task',
-            'action_type' => 'create',
-            'target_type' => 'task',
-            'target_id' => $task->id,
-            'target_name' => $task->title,
-        ]);
-
-        return response()->json([
-            'code' => 200,
-            'message' => '任务创建成功',
-            'data' => $task->load(['assignee:id,display_name', 'requirement:id,title', 'project:id,name']),
-        ], 201);
+        return ApiResponse::success(
+            (new TaskResource($task))->resolve($request),
+            'Task created.',
+            201,
+        );
     }
 
-    /**
-     * 任务详情
-     * GET /api/tasks/{id}
-     */
     public function show(Request $request, int $id): JsonResponse
     {
-        $user = $request->user();
-        $task = Task::with([
-            'assignee:id,display_name,username',
-            'requirement:id,title,status',
-            'project:id,name',
-            'creator:id,display_name',
-        ])->findOrFail($id);
+        $task = $this->resourceQuery()->findOrFail($id);
+        Gate::forUser($request->user())->authorize('view', $task);
 
-        if (!$user->can('view', $task)) {
-            return response()->json(['code' => 403, 'message' => '您无权查看该任务'], 403);
-        }
-
-        return response()->json([
-            'code' => 200,
-            'message' => 'success',
-            'data' => $task,
-        ]);
+        return ApiResponse::success(
+            (new TaskResource($task))->resolve($request),
+        );
     }
 
-    /**
-     * 编辑任务
-     * PUT /api/tasks/{id}
-     */
     public function update(UpdateTaskRequest $request, int $id): JsonResponse
     {
-        $user = $request->user();
-        $task = Task::findOrFail($id);
+        $task = $this->resourceQuery()->findOrFail($id);
+        $updated = $this->workflow->update(
+            $task,
+            $request->validated(),
+            $request->user(),
+        );
 
-        if (!$user->can('update', $task)) {
-            return response()->json(['code' => 403, 'message' => '您无权编辑该任务'], 403);
-        }
-
-        $task->update($request->only([
-            'title', 'description', 'assignee_id', 'priority',
-            'due_date', 'remind_days_before', 'estimated_hours', 'actual_hours',
-        ]));
-
-        // 操作日志
-        AuditLogger::log($user->id, [
-            'user_name' => $user->username,
-            'user_display_name' => $user->display_name,
-            'user_type' => $user->user_type,
-            'module' => 'task',
-            'action_type' => 'update',
-            'target_type' => 'task',
-            'target_id' => $task->id,
-            'target_name' => $task->title,
-        ]);
-
-        return response()->json([
-            'code' => 200,
-            'message' => '任务更新成功',
-            'data' => $task->fresh(['assignee:id,display_name', 'requirement:id,title']),
-        ]);
+        return ApiResponse::success(
+            (new TaskResource($updated))->resolve($request),
+            'Task updated.',
+        );
     }
 
-    /**
-     * 认领任务（供应商开发/测试人员认领）
-     * POST /api/tasks/{id}/claim
-     */
     public function claim(Request $request, int $id): JsonResponse
     {
-        $user = $request->user();
-        $task = Task::findOrFail($id);
+        $task = $this->resourceQuery()->findOrFail($id);
+        Gate::forUser($request->user())->authorize('claim', $task);
 
-        if (!$user->can('claim', $task)) {
-            return response()->json(['code' => 403, 'message' => '您无权认领任务'], 403);
-        }
+        $task = $this->workflow->claim($task, $request->user());
 
-        if ($task->assignee_id) {
-            return response()->json([
-                'code' => 422,
-                'message' => '该任务已被认领',
-            ], 422);
-        }
+        return ApiResponse::success(
+            (new TaskResource($task))->resolve($request),
+            'Task claimed.',
+        );
+    }
 
-        $task->update([
-            'assignee_id' => $user->id,
-            'status' => TaskStatus::IN_PROGRESS->value,
-        ]);
+    public function transition(TransitionTaskRequest $request, int $id): JsonResponse
+    {
+        $task = Task::query()->findOrFail($id);
+        $validated = $request->validated();
+        $task = $this->workflow->transition(
+            $task,
+            TaskStatus::from((int) $validated['status']),
+            $request->user(),
+            $validated['reason'] ?? null,
+        );
 
-        // 操作日志
-        AuditLogger::log($user->id, [
-            'user_name' => $user->username,
-            'user_display_name' => $user->display_name,
-            'user_type' => $user->user_type,
-            'module' => 'task',
-            'action_type' => 'claim',
-            'target_type' => 'task',
-            'target_id' => $task->id,
-            'target_name' => $task->title,
-        ]);
+        return ApiResponse::success(
+            (new TaskResource($task))->resolve($request),
+            'Task status updated.',
+        );
+    }
 
-        return response()->json([
-            'code' => 200,
-            'message' => '任务认领成功',
-            'data' => $task->fresh(),
+    public function hold(HoldTaskRequest $request, int $id): JsonResponse
+    {
+        $task = Task::query()->findOrFail($id);
+        $task = $this->workflow->hold(
+            $task,
+            $request->user(),
+            $request->validated('reason'),
+        );
+
+        return ApiResponse::success(
+            (new TaskResource($task))->resolve($request),
+            'Task held.',
+        );
+    }
+
+    private function resourceQuery(): Builder
+    {
+        return Task::query()->with([
+            'assignee:id,display_name',
+            'requirement:id,title,status',
+            'project:id,name,manager_id,supplier_org_id',
         ]);
     }
 
-    /**
-     * 状态变更
-     * POST /api/tasks/{id}/status
-     */
-    public function transition(Request $request, int $id): JsonResponse
+    private function present(Task $task): Task
     {
-        $user = $request->user();
-        $task = Task::findOrFail($id);
-
-        if (!$user->can('transition', $task)) {
-            return response()->json(['code' => 403, 'message' => '您无权变更该任务状态'], 403);
-        }
-
-        $request->validate([
-            'status' => ['required', 'integer', 'in:1,2,3,4'],
-        ]);
-
-        $newStatus = $request->integer('status');
-        $oldStatus = $task->status;
-
-        $data = ['status' => $newStatus];
-
-        // 完成时记录完成时间
-        if ($newStatus === TaskStatus::COMPLETED->value) {
-            $data['completed_at'] = now();
-        }
-
-        $task->update($data);
-
-        // 操作日志
-        AuditLogger::log($user->id, [
-            'user_name' => $user->username,
-            'user_display_name' => $user->display_name,
-            'user_type' => $user->user_type,
-            'module' => 'task',
-            'action_type' => 'status_change',
-            'target_type' => 'task',
-            'target_id' => $task->id,
-            'target_name' => $task->title,
-            'detail' => [
-                'from_status' => $oldStatus,
-                'from_label' => TaskStatus::from($oldStatus)->label(),
-                'to_status' => $newStatus,
-                'to_label' => TaskStatus::from($newStatus)->label(),
-            ],
-        ]);
-
-        return response()->json([
-            'code' => 200,
-            'message' => '任务状态更新成功',
-            'data' => $task->fresh(),
-        ]);
-    }
-
-    /**
-     * 挂起任务
-     * POST /api/tasks/{id}/hold
-     */
-    public function hold(Request $request, int $id): JsonResponse
-    {
-        $user = $request->user();
-        $task = Task::findOrFail($id);
-
-        if (!$user->can('transition', $task)) {
-            return response()->json(['code' => 403, 'message' => '您无权操作该任务'], 403);
-        }
-
-        $request->validate([
-            'reason' => ['required', 'string', 'max:500'],
-        ]);
-
-        $task->update([
-            'status' => TaskStatus::SUSPENDED->value,
-            'suspend_reason' => $request->input('reason'),
-        ]);
-
-        // 操作日志
-        AuditLogger::log($user->id, [
-            'user_name' => $user->username,
-            'user_display_name' => $user->display_name,
-            'user_type' => $user->user_type,
-            'module' => 'task',
-            'action_type' => 'suspend',
-            'target_type' => 'task',
-            'target_id' => $task->id,
-            'target_name' => $task->title,
-            'detail' => ['reason' => $request->input('reason')],
-        ]);
-
-        return response()->json([
-            'code' => 200,
-            'message' => '任务已挂起',
-            'data' => $task->fresh(),
+        return $task->fresh([
+            'assignee:id,display_name',
+            'requirement:id,title,status',
+            'project:id,name,manager_id,supplier_org_id',
         ]);
     }
 }

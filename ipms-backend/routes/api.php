@@ -51,10 +51,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/', [ProjectController::class, 'store']);
         Route::get('/{projectId}/versions', [ProjectVersionController::class, 'index'])->whereNumber('projectId');
         Route::post('/{projectId}/versions', [ProjectVersionController::class, 'store'])->whereNumber('projectId');
-        Route::get('/{id}', [ProjectController::class, 'show']);
-        Route::put('/{id}', [ProjectController::class, 'update']);
-        Route::delete('/{id}', [ProjectController::class, 'destroy']);
-        Route::post('/{id}/archive', [ProjectController::class, 'archive']);
+        Route::get('/{id}', [ProjectController::class, 'show'])->whereNumber('id');
+        Route::put('/{id}', [ProjectController::class, 'update'])->whereNumber('id');
+        Route::delete('/{id}', [ProjectController::class, 'destroy'])->whereNumber('id');
+        Route::post('/{id}/archive', [ProjectController::class, 'archive'])->whereNumber('id');
 
         // Documents (scoped under project)
         Route::get('/{projectId}/documents', [DocumentController::class, 'index']);
@@ -87,14 +87,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/', [RequirementController::class, 'store']);
         Route::put('/{requirementId}/projects/{projectId}/version', [ProjectVersionController::class, 'assignRequirement'])->whereNumber(['requirementId', 'projectId']);
         Route::delete('/{requirementId}/projects/{projectId}/version', [ProjectVersionController::class, 'unassignRequirement'])->whereNumber(['requirementId', 'projectId']);
-        Route::get('/{id}', [RequirementController::class, 'show']);
-        Route::put('/{id}', [RequirementController::class, 'update']);
-        Route::post('/{id}/review', [RequirementController::class, 'review']);
-        Route::post('/{id}/resubmit', [RequirementController::class, 'resubmit']);
-        Route::post('/{id}/status', [RequirementController::class, 'transition']);
-        Route::get('/{id}/versions', [RequirementController::class, 'versions']);
-        Route::get('/{id}/versions/{vid}', [RequirementController::class, 'versionDetail']);
-        Route::post('/{id}/tasks', [RequirementController::class, 'storeTask']);
+        Route::get('/{id}', [RequirementController::class, 'show'])->whereNumber('id');
+        Route::put('/{id}', [RequirementController::class, 'update'])->whereNumber('id');
+        Route::post('/{id}/review', [RequirementController::class, 'review'])->whereNumber('id');
+        Route::post('/{id}/resubmit', [RequirementController::class, 'resubmit'])->whereNumber('id');
+        Route::post('/{id}/status', [RequirementController::class, 'transition'])->whereNumber('id');
+        Route::get('/{id}/versions', [RequirementController::class, 'versions'])->whereNumber('id');
+        Route::get('/{id}/versions/{vid}', [RequirementController::class, 'versionDetail'])->whereNumber(['id', 'vid']);
+        Route::post('/{id}/tasks', [RequirementController::class, 'storeTask'])->whereNumber('id');
     });
 
     // ========================================================================
@@ -103,11 +103,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('tasks')->group(function () {
         Route::get('/', [TaskController::class, 'index']);
         Route::post('/', [TaskController::class, 'store']);
-        Route::get('/{id}', [TaskController::class, 'show']);
-        Route::put('/{id}', [TaskController::class, 'update']);
-        Route::post('/{id}/claim', [TaskController::class, 'claim']);
-        Route::post('/{id}/status', [TaskController::class, 'transition']);
-        Route::post('/{id}/hold', [TaskController::class, 'hold']);
+        Route::get('/{id}', [TaskController::class, 'show'])->whereNumber('id');
+        Route::put('/{id}', [TaskController::class, 'update'])->whereNumber('id');
+        Route::post('/{id}/claim', [TaskController::class, 'claim'])->whereNumber('id');
+        Route::post('/{id}/status', [TaskController::class, 'transition'])->whereNumber('id');
+        Route::post('/{id}/hold', [TaskController::class, 'hold'])->whereNumber('id');
     });
 
     // ========================================================================
@@ -116,13 +116,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('defects')->group(function () {
         Route::get('/', [DefectController::class, 'index']);
         Route::post('/', [DefectController::class, 'store']);
-        Route::get('/{id}', [DefectController::class, 'show']);
-        Route::put('/{id}', [DefectController::class, 'update']);
-        Route::post('/{id}/confirm', [DefectController::class, 'confirm']);
-        Route::post('/{id}/assign', [DefectController::class, 'assign']);
-        Route::post('/{id}/resolve', [DefectController::class, 'resolve']);
-        Route::post('/{id}/verify', [DefectController::class, 'verify']);
-        Route::post('/{id}/reopen', [DefectController::class, 'reopen']);
+        Route::get('/{id}', [DefectController::class, 'show'])->whereNumber('id');
+        Route::put('/{id}', [DefectController::class, 'update'])->whereNumber('id');
+        Route::post('/{id}/confirm', [DefectController::class, 'confirm'])->whereNumber('id');
+        Route::post('/{id}/assign', [DefectController::class, 'assign'])->whereNumber('id');
+        Route::post('/{id}/resolve', [DefectController::class, 'resolve'])->whereNumber('id');
+        Route::post('/{id}/verify', [DefectController::class, 'verify'])->whereNumber('id');
+        Route::post('/{id}/reopen', [DefectController::class, 'reopen'])->whereNumber('id');
     });
 
     // ========================================================================

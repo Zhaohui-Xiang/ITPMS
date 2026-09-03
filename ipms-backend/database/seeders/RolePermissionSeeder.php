@@ -49,7 +49,7 @@ class RolePermissionSeeder extends Seeder
             'project.view',
             'requirement.view', 'requirement.transition',
             'task.create', 'task.edit', 'task.assign', 'task.view',
-            'defect.create', 'defect.edit', 'defect.fix', 'defect.view',
+            'defect.create', 'defect.edit', 'defect.assign', 'defect.fix', 'defect.view',
             'document.upload', 'document.download', 'document.edit_api', 'document.view',
             'audit.view_scoped',
         ]);
@@ -69,7 +69,7 @@ class RolePermissionSeeder extends Seeder
             'project.view',
             'requirement.view',
             'task.view', 'task.claim', 'task.update_status',
-            'defect.create', 'defect.edit', 'defect.view',
+            'defect.create', 'defect.edit', 'defect.retest', 'defect.view',
             'document.upload', 'document.download', 'document.view',
             'audit.view_scoped',
         ]);

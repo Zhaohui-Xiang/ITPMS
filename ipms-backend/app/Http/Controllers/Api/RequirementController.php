@@ -2,48 +2,54 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\DefectSeverity;
+use App\Enums\DefectStatus;
 use App\Enums\ProjectDeliveryStatus;
+use App\Enums\TaskStatus;
+use App\Enums\UserType;
 use App\Http\Controllers\Controller;
-use App\Http\Middleware\AuditLogger;
 use App\Http\Requests\ReviewRequirementRequest;
 use App\Http\Requests\StoreRequirementRequest;
 use App\Http\Requests\StoreTaskRequest;
 use App\Http\Requests\UpdateRequirementRequest;
+use App\Http\Resources\RequirementResource;
+use App\Http\Resources\TaskResource;
+use App\Models\Defect;
 use App\Models\Project;
 use App\Models\Requirement;
 use App\Models\Task;
+use App\Models\User;
 use App\Scopes\ProjectScope;
 use App\Scopes\RequirementScope;
 use App\Services\RequirementWorkflowService;
+use App\Services\TaskWorkflowService;
 use App\Support\ApiResponse;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 
-class RequirementController extends Controller
+final class RequirementController extends Controller
 {
     public function __construct(
         private readonly RequirementWorkflowService $workflow,
+        private readonly TaskWorkflowService $taskWorkflow,
     ) {}
 
-    /**
-     * 需求列表（权限过滤 + 按状态/项目/优先级筛选）
-     * GET /api/requirements
-     */
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
-
         $projectRules = [
             $request->has('version_scope') ? 'required' : 'sometimes',
             'integer',
         ];
+
         if ($request->input('version_scope') !== 'unplanned') {
             $projectRules[] = 'exists:projects,id';
         }
 
         $validatedFilters = $request->validate([
-            'version_scope' => ['sometimes', 'in:unplanned'],
+            'version_scope' => ['sometimes', 'string', 'in:unplanned'],
             'project_id' => $projectRules,
         ]);
         $versionScope = $validatedFilters['version_scope'] ?? null;
@@ -53,227 +59,141 @@ class RequirementController extends Controller
 
         if ($projectId !== null) {
             if ($versionScope === 'unplanned') {
-                ProjectScope::apply(Project::query(), $user)
-                    ->findOrFail($projectId);
+                ProjectScope::apply(Project::query(), $user)->findOrFail($projectId);
             } else {
                 $targetProject = Project::query()->findOrFail($projectId);
                 Gate::forUser($user)->authorize('view', $targetProject);
             }
         }
 
-        $relations = [
-            'submitter:id,display_name,username',
-            'reviewer:id,display_name,username',
-        ];
-        if ($versionScope === 'unplanned') {
-            $relations['projects'] = static fn ($query) => $query
-                ->select(['projects.id', 'projects.name'])
-                ->where('projects.id', $projectId);
-        } else {
-            $relations[] = 'projects:id,name';
+        $scopedProjectId = $versionScope === 'unplanned' ? $projectId : null;
+        $query = RequirementScope::apply(
+            $this->resourceQuery($user, $scopedProjectId),
+            $user,
+        );
+
+        foreach (['status', 'priority', 'requirement_type'] as $filter) {
+            if ($request->has($filter)) {
+                $query->where($filter, $request->integer($filter));
+            }
         }
 
-        $query = Requirement::with($relations);
-        $query = RequirementScope::apply($query, $user);
-
-        // 按状态筛选
-        if ($request->has('status')) {
-            $query->where('status', $request->integer('status'));
-        }
-
-        // 按优先级筛选
-        if ($request->has('priority')) {
-            $query->where('priority', $request->integer('priority'));
-        }
-
-        // 按项目筛选
-        if ($request->has('project_id')) {
-            $projectId = $request->integer('project_id');
-            $query->whereHas('projects', function ($q) use ($projectId) {
-                $q->where('projects.id', $projectId);
-            });
+        if ($projectId !== null) {
+            $query->whereHas('projects', fn (Builder $projectQuery): Builder => $projectQuery
+                ->where('projects.id', $projectId));
         }
 
         if ($versionScope === 'unplanned') {
-            $projectId = $request->integer('project_id');
-            $query->whereHas('projectLinks', function ($q) use ($projectId) {
-                $q
-                    ->where('project_id', $projectId)
-                    ->whereNull('project_version_id');
-            });
+            $query->whereHas('projectLinks', fn (Builder $linkQuery): Builder => $linkQuery
+                ->where('project_id', $projectId)
+                ->whereNull('project_version_id'));
         }
 
-        // 按需求类型筛选
-        if ($request->has('requirement_type')) {
-            $query->where('requirement_type', $request->integer('requirement_type'));
-        }
-
-        // 搜索标题
         if ($request->has('keyword')) {
             $query->where('title', 'like', '%'.$request->input('keyword').'%');
         }
 
         $pageSize = min(max($request->integer('page_size', 20), 1), 100);
-        $paginator = $query->orderBy('updated_at', 'desc')->paginate($pageSize);
+        $paginator = $query->orderByDesc('updated_at')->paginate($pageSize);
 
-        return ApiResponse::paginated($paginator);
+        return ApiResponse::paginated(
+            $paginator,
+            fn (Requirement $requirement): array => (new RequirementResource($requirement))
+                ->resolve($request),
+        );
     }
 
-    /**
-     * 创建需求（系统用户/IT用户）
-     * POST /api/requirements
-     */
     public function store(StoreRequirementRequest $request): JsonResponse
     {
-        $user = $request->user();
+        $requirement = $this->workflow->submit(
+            $request->validated(),
+            $request->user(),
+        );
 
-        $requirement = $this->workflow->submit($request->validated(), $user);
-
-        return response()->json([
-            'code' => 201,
-            'message' => '需求创建成功',
-            'data' => $requirement->load(['submitter:id,display_name', 'projects:id,name']),
-        ], 201);
+        return ApiResponse::success(
+            (new RequirementResource($this->present($requirement, $request->user())))->resolve($request),
+            'Requirement created.',
+            201,
+        );
     }
 
-    /**
-     * 需求详情（含关联项目、子任务、版本历史）
-     * GET /api/requirements/{id}
-     */
     public function show(Request $request, int $id): JsonResponse
     {
-        $user = $request->user();
-        $requirement = Requirement::with([
-            'submitter:id,display_name,username,user_type',
-            'reviewer:id,display_name,username',
-            'devLead:id,display_name,username',
-            'creator:id,display_name',
-            'updater:id,display_name',
-            'projects:id,name,system_type',
-            'tasks' => function ($q) {
-                $q->with('assignee:id,display_name')->orderBy('created_at', 'desc');
-            },
-            'versions' => function ($q) {
-                $q->with('changedBy:id,display_name')->orderBy('version_number', 'desc');
-            },
-            'attachments' => function ($q) {
-                $q->with('uploader:id,display_name')->orderBy('uploaded_at', 'desc');
-            },
-        ])->findOrFail($id);
+        $requirement = $this->resourceQuery($request->user())->findOrFail($id);
+        Gate::forUser($request->user())->authorize('view', $requirement);
 
-        // 行级权限检查
-        if (! $user->can('view', $requirement)) {
-            return response()->json(['code' => 403, 'message' => '您无权查看该需求'], 403);
-        }
-
-        return response()->json([
-            'code' => 200,
-            'message' => 'success',
-            'data' => $requirement,
-        ]);
+        return ApiResponse::success(
+            (new RequirementResource($requirement))->resolve($request),
+        );
     }
 
-    /**
-     * 编辑需求（自动生成版本记录）
-     * PUT /api/requirements/{id}
-     */
     public function update(UpdateRequirementRequest $request, int $id): JsonResponse
     {
-        $user = $request->user();
-        $requirement = Requirement::findOrFail($id);
-
-        if (! $user->can('update', $requirement)) {
-            return ApiResponse::error('REQUIREMENT_UPDATE_FORBIDDEN', 'You are not allowed to edit this requirement.', 403);
-        }
+        $requirement = Requirement::query()->findOrFail($id);
+        Gate::forUser($request->user())->authorize('update', $requirement);
 
         $result = $this->workflow->update(
             $requirement,
-            $user,
+            $request->user(),
             $request->validated(),
         );
 
         return ApiResponse::success(
-            $result->requirement,
+            (new RequirementResource($this->present($result->requirement, $request->user())))->resolve($request),
             $result->message(),
         );
     }
 
-    /**
-     * 审核需求（通过/驳回）
-     * POST /api/requirements/{id}/review
-     */
     public function review(ReviewRequirementRequest $request, int $id): JsonResponse
     {
-        $user = $request->user();
-        $requirement = Requirement::findOrFail($id);
+        $requirement = Requirement::query()->findOrFail($id);
+        Gate::forUser($request->user())->authorize('approve', $requirement);
+        $validated = $request->validated();
 
-        if (! $user->can('approve', $requirement)) {
-            return ApiResponse::error(
-                'REQUIREMENT_REVIEW_FORBIDDEN',
-                'You are not allowed to review this requirement.',
-                403,
-            );
-        }
-
-        $action = $request->string('action')->toString();
-        $comment = $request->input('comment');
         $requirement = $this->workflow->review(
             $requirement,
-            $user,
-            $action,
-            $comment,
+            $request->user(),
+            $validated['action'],
+            $validated['comment'] ?? null,
         );
 
-        $message = $action === 'approve'
-            ? 'Requirement approved.'
-            : 'Requirement rejected.';
-
-        return ApiResponse::success($requirement, $message);
+        return ApiResponse::success(
+            (new RequirementResource($this->present($requirement, $request->user())))->resolve($request),
+            $validated['action'] === 'approve'
+                ? 'Requirement approved.'
+                : 'Requirement rejected.',
+        );
     }
 
-    /**
-     * 状态流转（含权限校验）
-     * POST /api/requirements/{id}/status
-     */
     public function transition(Request $request, int $id): JsonResponse
     {
-        $user = $request->user();
-        $requirement = Requirement::findOrFail($id);
-
-        if (! $user->can('transition', $requirement)) {
-            return ApiResponse::error(
-                'REQUIREMENT_TRANSITION_FORBIDDEN',
-                'You are not allowed to change this requirement delivery status.',
-                403,
-            );
-        }
+        $requirement = Requirement::query()->findOrFail($id);
+        Gate::forUser($request->user())->authorize('transition', $requirement);
 
         $validated = $request->validate([
-            'project_id' => ['required', 'integer', 'exists:projects,id'],
-            'status' => ['required', 'integer', 'in:2,3,4,5,6,7'],
+            'project_id' => ['required', 'integer:strict', 'exists:projects,id'],
+            'status' => ['required', 'integer:strict', 'in:2,3,4,5,6,7'],
         ]);
-        $targetStatus = ProjectDeliveryStatus::from((int) $validated['status']);
 
         $this->workflow->transitionProjectDelivery(
             $requirement,
             (int) $validated['project_id'],
-            $targetStatus,
-            $user,
+            ProjectDeliveryStatus::from((int) $validated['status']),
+            $request->user(),
         );
 
         return ApiResponse::success(
-            $requirement->fresh(['projectLinks']),
+            (new RequirementResource($this->present($requirement, $request->user())))->resolve($request),
             'Project delivery status updated.',
         );
     }
 
     public function resubmit(UpdateRequirementRequest $request, int $id): JsonResponse
     {
+        $requirement = Requirement::query()->findOrFail($id);
         $user = $request->user();
-        $requirement = Requirement::findOrFail($id);
 
-        if (! $user->can('update', $requirement)
-            || $requirement->submitter_id !== $user->id) {
+        if ($requirement->submitter_id !== $user->id) {
             return ApiResponse::error(
                 'REQUIREMENT_RESUBMIT_FORBIDDEN',
                 'Only the original requester may resubmit this requirement.',
@@ -281,112 +201,180 @@ class RequirementController extends Controller
             );
         }
 
+        Gate::forUser($user)->authorize('update', $requirement);
         $requirement = $this->workflow->resubmit(
             $requirement,
             $user,
             $request->validated(),
         );
 
-        return ApiResponse::success($requirement, 'Requirement resubmitted.');
+        return ApiResponse::success(
+            (new RequirementResource($this->present($requirement, $request->user())))->resolve($request),
+            'Requirement resubmitted.',
+        );
     }
 
-    /**
-     * 版本历史列表
-     * GET /api/requirements/{id}/versions
-     */
     public function versions(Request $request, int $id): JsonResponse
     {
-        $user = $request->user();
-        $requirement = Requirement::findOrFail($id);
+        $requirement = Requirement::query()->findOrFail($id);
+        Gate::forUser($request->user())->authorize('view', $requirement);
 
-        if (! $user->can('view', $requirement)) {
-            return response()->json(['code' => 403, 'message' => '您无权查看该需求'], 403);
-        }
-
-        $versions = $requirement->versions()
-            ->with('changedBy:id,display_name')
-            ->orderBy('version_number', 'desc')
-            ->get();
-
-        return response()->json([
-            'code' => 200,
-            'message' => 'success',
-            'data' => $versions,
-        ]);
+        return ApiResponse::success(
+            $requirement->versions()
+                ->with('changedBy:id,display_name')
+                ->orderByDesc('version_number')
+                ->get(),
+        );
     }
 
-    /**
-     * 查看某个版本详情
-     * GET /api/requirements/{id}/versions/{vid}
-     */
-    public function versionDetail(Request $request, int $id, int $vid): JsonResponse
-    {
-        $user = $request->user();
-        $requirement = Requirement::findOrFail($id);
-
-        if (! $user->can('view', $requirement)) {
-            return response()->json(['code' => 403, 'message' => '您无权查看该需求'], 403);
-        }
+    public function versionDetail(
+        Request $request,
+        int $id,
+        int $vid,
+    ): JsonResponse {
+        $requirement = Requirement::query()->findOrFail($id);
+        Gate::forUser($request->user())->authorize('view', $requirement);
 
         $version = $requirement->versions()
             ->with('changedBy:id,display_name')
             ->where('version_number', $vid)
             ->firstOrFail();
 
-        return response()->json([
-            'code' => 200,
-            'message' => 'success',
-            'data' => $version,
+        return ApiResponse::success($version);
+    }
+
+    public function storeTask(StoreTaskRequest $request, int $id): JsonResponse
+    {
+        $validated = $request->validated();
+        $requirement = Requirement::query()->findOrFail($id);
+        $project = Project::query()->findOrFail((int) $validated['project_id']);
+        Gate::forUser($request->user())->authorize(
+            'createTask',
+            [$requirement, $project],
+        );
+
+        $task = $this->taskWorkflow->create($validated, $request->user());
+
+        return ApiResponse::success(
+            (new TaskResource($task))->resolve($request),
+            'Task created.',
+            201,
+        );
+    }
+
+    private function resourceQuery(
+        User $actor,
+        ?int $scopedProjectId = null,
+    ): Builder {
+        return Requirement::query()->with([
+            'submitter:id,display_name',
+            'reviewer:id,display_name',
+            'devLead:id,display_name',
+            'projects' => function ($projectQuery) use ($actor, $scopedProjectId): void {
+                $projectQuery->select([
+                    'projects.id',
+                    'projects.name',
+                    'projects.system_type',
+                ]);
+                $this->constrainProjectQuery($projectQuery, $actor);
+
+                if ($scopedProjectId !== null) {
+                    $projectQuery->where('projects.id', $scopedProjectId);
+                }
+            },
+            'projectLinks' => function ($linkQuery) use ($actor, $scopedProjectId): void {
+                $linkQuery
+                    ->select('requirement_project.*')
+                    ->selectSub(
+                        Task::query()
+                            ->selectRaw('count(*)')
+                            ->whereColumn(
+                                'tasks.requirement_id',
+                                'requirement_project.requirement_id',
+                            )
+                            ->whereColumn(
+                                'tasks.project_id',
+                                'requirement_project.project_id',
+                            ),
+                        'task_total',
+                    )
+                    ->selectSub(
+                        Task::query()
+                            ->selectRaw('count(*)')
+                            ->whereColumn(
+                                'tasks.requirement_id',
+                                'requirement_project.requirement_id',
+                            )
+                            ->whereColumn(
+                                'tasks.project_id',
+                                'requirement_project.project_id',
+                            )
+                            ->where('tasks.status', TaskStatus::COMPLETED->value),
+                        'task_completed',
+                    )
+                    ->selectSub(
+                        Defect::query()
+                            ->selectRaw('count(*)')
+                            ->whereColumn(
+                                'defects.requirement_id',
+                                'requirement_project.requirement_id',
+                            )
+                            ->whereColumn(
+                                'defects.project_id',
+                                'requirement_project.project_id',
+                            )
+                            ->whereIn('defects.severity', [
+                                DefectSeverity::FATAL->value,
+                                DefectSeverity::SERIOUS->value,
+                            ])
+                            ->where('defects.status', '!=', DefectStatus::CLOSED->value),
+                        'open_severe_defect_count',
+                    )
+                    ->with([
+                        'project:id,name,system_type,manager_id,supplier_org_id',
+                        'project.manager:id,display_name',
+                        'projectVersion:id,project_id,code,name,status,owner_id',
+                        'projectVersion.owner:id,display_name',
+                    ]);
+                $this->constrainProjectLinks($linkQuery, $actor);
+
+                if ($scopedProjectId !== null) {
+                    $linkQuery->where('project_id', $scopedProjectId);
+                }
+            },
         ]);
     }
 
-    /**
-     * 在需求下创建子任务
-     * POST /api/requirements/{id}/tasks
-     */
-    public function storeTask(StoreTaskRequest $request, int $id): JsonResponse
+    private function constrainProjectQuery(mixed $query, User $actor): void
     {
-        $user = $request->user();
-        $requirement = Requirement::findOrFail($id);
-
-        if (! $user->can('view', $requirement)) {
-            return response()->json(['code' => 403, 'message' => '您无权操作该需求'], 403);
+        if ($actor->user_type !== UserType::SUPPLIER->value) {
+            return;
         }
 
-        // 取需求关联的第一个项目作为任务的 project_id
-        $firstProject = $requirement->projects()->first();
-        $projectId = $firstProject ? $firstProject->id : null;
+        $orgIds = $actor->getSupplierDescendantOrgIds();
+        $orgIds === []
+            ? $query->whereRaw('1 = 0')
+            : $query->whereIn('supplier_org_id', $orgIds);
+    }
 
-        $task = Task::create([
-            'requirement_id' => $requirement->id,
-            'project_id' => $projectId,
-            'title' => $request->input('title'),
-            'description' => $request->input('description'),
-            'assignee_id' => $request->input('assignee_id'),
-            'priority' => $request->input('priority'),
-            'due_date' => $request->input('due_date'),
-            'remind_days_before' => $request->integer('remind_days_before', 1),
-            'estimated_hours' => $request->input('estimated_hours'),
-            'status' => 1, // 待开始
-            'created_by_id' => $user->id,
-        ]);
+    private function constrainProjectLinks(mixed $query, User $actor): void
+    {
+        if ($actor->user_type !== UserType::SUPPLIER->value) {
+            return;
+        }
 
-        // 操作日志
-        AuditLogger::log($user->id, [
-            'user_name' => $user->username,
-            'user_display_name' => $user->display_name,
-            'user_type' => $user->user_type,
-            'module' => 3,
-            'action_type' => 1,
-            'target_type' => 'task',
-            'target_id' => $task->id,
-            'target_name' => $task->title,
-        ]);
+        $query->whereHas(
+            'project',
+            function ($projectQuery) use ($actor): void {
+                $this->constrainProjectQuery($projectQuery, $actor);
+            },
+        );
+    }
 
-        return response()->json([
-            'code' => 200,
-            'message' => '子任务创建成功',
-            'data' => $task->load('assignee:id,display_name'),
-        ], 201);
+    private function present(
+        Requirement $requirement,
+        User $actor,
+    ): Requirement {
+        return $this->resourceQuery($actor)->findOrFail($requirement->id);
     }
 }
