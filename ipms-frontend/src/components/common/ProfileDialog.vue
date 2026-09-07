@@ -22,6 +22,8 @@ const passwordFormRef = ref(null)
 const activeTab = ref('profile')
 const savingProfile = ref(false)
 const savingPassword = ref(false)
+const passwordChanged = ref(false)
+const refreshingUser = ref(false)
 const fieldErrors = ref({})
 
 const profileForm = reactive({
@@ -49,6 +51,7 @@ const passwordRules = {
   newPassword: [
     { required: true, message: '请输入新密码', trigger: 'blur' },
     { min: 8, message: '新密码至少 8 位', trigger: 'blur' },
+    { max: 128, message: '新密码不能超过 128 位', trigger: 'blur' },
   ],
   newPasswordConfirmation: [
     { required: true, message: '请确认新密码', trigger: 'blur' },
@@ -95,6 +98,31 @@ function beforeClose(done) {
   done()
 }
 
+async function refreshUserState() {
+  const lockedUser = authStore.user
+  refreshingUser.value = true
+  fieldErrors.value = {}
+
+  try {
+    await authStore.fetchUser()
+    if (authStore.mustChangePassword) {
+      authStore.user = lockedUser
+      fieldErrors.value = { general: ['密码已修改，但用户状态尚未更新，请重试'] }
+      return
+    }
+
+    passwordChanged.value = false
+    ElMessage.success('密码已更新')
+    emit('update:modelValue', false)
+  } catch {
+    authStore.user = lockedUser
+    fieldErrors.value = { general: ['密码已修改，但用户状态刷新失败，请重试'] }
+    ElMessage.warning('密码已修改，请重试状态刷新')
+  } finally {
+    refreshingUser.value = false
+  }
+}
+
 async function saveProfile() {
   fieldErrors.value = {}
   try {
@@ -133,12 +161,9 @@ async function savePassword() {
       new_password: passwordForm.newPassword,
       new_password_confirmation: passwordForm.newPasswordConfirmation,
     })
-    await authStore.fetchUser()
     resetPasswordForm()
-    ElMessage.success('密码已更新')
-    if (!authStore.mustChangePassword) {
-      emit('update:modelValue', false)
-    }
+    passwordChanged.value = true
+    await refreshUserState()
   } catch (error) {
     fieldErrors.value = validationErrors(error)
     ElMessage.error(error?.response?.data?.message ?? '密码修改失败')
@@ -268,6 +293,15 @@ watch(
         @click="saveProfile"
       >
         保存资料
+      </el-button>
+      <el-button
+        v-else-if="passwordChanged"
+        data-testid="password-refresh"
+        type="primary"
+        :loading="refreshingUser"
+        @click="refreshUserState"
+      >
+        重新验证状态
       </el-button>
       <el-button
         v-else

@@ -21,6 +21,7 @@ vi.mock('element-plus', () => ({
   ElMessage: {
     error: vi.fn(),
     success: vi.fn(),
+    warning: vi.fn(),
   },
 }))
 
@@ -217,6 +218,43 @@ describe('ProfileDialog', () => {
     })
     await flushPromises()
 
+    expect(auth.mustChangePassword).toBe(false)
+    expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual([false])
+  })
+
+  it('keeps the forced lock and retries user refresh without changing the password twice', async () => {
+    changePassword.mockResolvedValueOnce({ data: { data: null } })
+    fetchUser
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValueOnce({
+        data: {
+          data: {
+            user: makeUser({ must_change_password: false }),
+          },
+        },
+      })
+    auth.user = makeUser({ must_change_password: true })
+    const wrapper = mountDialog({
+      modelValue: false,
+      forcePasswordChange: true,
+    })
+
+    await wrapper.get('[data-testid="current-password"]').setValue('Secret123')
+    await wrapper.get('[data-testid="new-password"]').setValue('NewSecret123')
+    await wrapper.get('[data-testid="confirm-password"]').setValue('NewSecret123')
+    await wrapper.get('[data-testid="password-save"]').trigger('click')
+    await flushPromises()
+
+    expect(changePassword).toHaveBeenCalledOnce()
+    expect(auth.mustChangePassword).toBe(true)
+    expect(wrapper.find('[data-testid="dialog"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="password-refresh"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="password-refresh"]').trigger('click')
+    await flushPromises()
+
+    expect(changePassword).toHaveBeenCalledOnce()
+    expect(fetchUser).toHaveBeenCalledTimes(2)
     expect(auth.mustChangePassword).toBe(false)
     expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual([false])
   })

@@ -27,6 +27,7 @@ vi.mock('element-plus', () => ({
 
 const ElForm = defineComponent({
   name: 'ElForm',
+  props: { rules: Object },
   setup(_props, { expose, slots }) {
     expose({ validate: () => Promise.resolve(true) })
     return () => h('form', slots.default?.())
@@ -80,5 +81,14 @@ describe('LoginView shell handoff', () => {
     expect(routerPush).toHaveBeenCalledWith('/dashboard')
     expect(changePassword).not.toHaveBeenCalled()
     expect(wrapper.find('.password-dialog').exists()).toBe(false)
+  })
+
+  it('does not reject a backend-valid password length before login', () => {
+    const wrapper = mount(LoginView, { global: { stubs } })
+    const passwordRules = wrapper.findComponent(ElForm).props('rules').password
+
+    expect(passwordRules).toEqual([
+      expect.objectContaining({ required: true }),
+    ])
   })
 })

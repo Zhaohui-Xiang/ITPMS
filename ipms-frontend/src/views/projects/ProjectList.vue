@@ -11,7 +11,6 @@ import {
   Edit,
   View,
   Delete,
-  RefreshRight,
   FolderChecked,
   Document,
   Warning,
@@ -20,9 +19,9 @@ import {
 import { usePermission } from '@/composables/usePermission'
 // import StatusTag from '@/components/common/StatusTag.vue'
 import UserSelector from '@/components/common/UserSelector.vue'
-// import { listProjects, createProject, updateProject, deleteProject, archiveProject, checkProjectDeletable } from '@/api/project'
+import { archiveProject } from '@/api/project'
 
-const { isSuperAdmin, canCreate, canEdit, canDelete } = usePermission()
+const { isSuperAdmin, canCreate, canEdit, canDelete, canPerform } = usePermission()
 
 // ===== 页面状态 =====
 const loading = ref(false)
@@ -340,6 +339,18 @@ function switchView(view) {
   currentView.value = view
 }
 
+function canEditProject(project) {
+  return canPerform(project, 'edit', canEdit('project'))
+}
+
+function canArchiveProject(project) {
+  return canPerform(project, 'archive', isSuperAdmin.value)
+}
+
+function canDeleteProject(project) {
+  return canPerform(project, 'delete', canDelete('project'))
+}
+
 // ===== 打开创建对话框 =====
 function openCreateDialog() {
   dialogTitle.value = '新建项目'
@@ -500,37 +511,25 @@ async function handleDelete(project) {
   }
 }
 
-// ===== 归档/取消归档项目 =====
+// ===== 归档项目 =====
 async function handleArchive(project) {
-  const isArchived = project.status === '归档'
-  const action = isArchived ? '取消归档' : '归档'
-
   try {
     await ElMessageBox.confirm(
-      `确定要${action}项目「${project.name}」吗？`,
-      `确认${action}`,
+      `确定要归档项目「${project.name}」吗？`,
+      '确认归档',
       {
-        confirmButtonText: `确定${action}`,
+        confirmButtonText: '确定归档',
         cancelButtonText: '取消',
         type: 'warning'
       }
     )
 
-    // await archiveProject(project.id)
-
-    // Mock: 更新本地状态
-    const index = allProjects.value.findIndex((p) => p.id === project.id)
-    if (index !== -1) {
-      allProjects.value[index] = {
-        ...allProjects.value[index],
-        status: isArchived ? '维护中' : '归档',
-        updated_at: new Date().toISOString().split('T')[0]
-      }
-    }
-    ElMessage.success(`项目已${action}`)
+    await archiveProject(project.id)
+    await fetchProjects()
+    ElMessage.success('项目已归档')
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') {
-      ElMessage.error(`${action}项目失败`)
+      ElMessage.error('归档项目失败')
       console.error('handleArchive error:', error)
     }
   }
@@ -681,7 +680,7 @@ function getStatusDotColor(status) {
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item
-                      v-if="canEdit('project')"
+                      v-if="canEditProject(project)"
                       :icon="Edit"
                       @click.stop="openEditDialog(project)"
                     >
@@ -694,13 +693,14 @@ function getStatusDotColor(status) {
                       查看详情
                     </el-dropdown-item>
                     <el-dropdown-item
-                      :icon="project.status === '归档' ? RefreshRight : FolderChecked"
+                      v-if="canArchiveProject(project)"
+                      :icon="FolderChecked"
                       @click.stop="handleArchive(project)"
                     >
-                      {{ project.status === '归档' ? '取消归档' : '归档' }}
+                      归档
                     </el-dropdown-item>
                     <el-dropdown-item
-                      v-if="canDelete('project')"
+                      v-if="canDeleteProject(project)"
                       :icon="Delete"
                       divided
                       class="danger-item"
@@ -852,7 +852,7 @@ function getStatusDotColor(status) {
           <template #default="{ row }">
             <div class="table-actions" @click.stop>
               <el-button
-                v-if="canEdit('project')"
+                v-if="canEditProject(row)"
                 link
                 type="primary"
                 size="small"
@@ -871,13 +871,14 @@ function getStatusDotColor(status) {
                       查看详情
                     </el-dropdown-item>
                     <el-dropdown-item
-                      :icon="row.status === '归档' ? RefreshRight : FolderChecked"
+                      v-if="canArchiveProject(row)"
+                      :icon="FolderChecked"
                       @click="handleArchive(row)"
                     >
-                      {{ row.status === '归档' ? '取消归档' : '归档' }}
+                      归档
                     </el-dropdown-item>
                     <el-dropdown-item
-                      v-if="canDelete('project')"
+                      v-if="canDeleteProject(row)"
                       :icon="Delete"
                       divided
                       class="danger-item"
