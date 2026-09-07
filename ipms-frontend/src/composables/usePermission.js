@@ -1,100 +1,96 @@
 import { computed } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 
-/**
- * 权限校验组合式函数
- * 提供菜单可见性和操作权限的响应式判断
- */
+const MENU_ITEMS = [
+  { index: '/dashboard', title: '工作台', icon: 'HomeFilled' },
+  { index: '/projects', title: '项目管理', icon: 'Folder' },
+  { index: '/requirements', title: '需求管理', icon: 'Document' },
+  { index: '/tasks', title: '任务管理', icon: 'List' },
+  { index: '/defects', title: '缺陷管理', icon: 'Warning' },
+  { index: '/documents', title: '文档管理', icon: 'Files' },
+  { index: '/audit-logs', title: '审计日志', icon: 'Tickets' },
+  { index: '/organizations', title: '组织架构', icon: 'OfficeBuilding' },
+]
+
+const ROLE_MENU_PATHS = {
+  requester: ['/dashboard', '/requirements', '/defects'],
+  supplier_dev: ['/dashboard', '/tasks', '/defects', '/documents'],
+  supplier_tester: ['/dashboard', '/tasks', '/defects', '/documents'],
+  supplier_pm: ['/dashboard', '/projects', '/requirements', '/tasks', '/defects', '/documents'],
+  it_member: ['/dashboard', '/projects', '/requirements', '/tasks', '/defects', '/documents'],
+  it_pm: ['/dashboard', '/projects', '/requirements', '/tasks', '/defects', '/documents', '/audit-logs'],
+  super_admin: MENU_ITEMS.map((item) => item.index),
+}
+
+const CREATE_MODULE_ROLES = {
+  requirement: ['requester', 'it_member', 'it_pm'],
+  task: ['supplier_pm', 'it_member', 'it_pm'],
+  defect: ['requester', 'supplier_tester', 'supplier_pm', 'it_member', 'it_pm'],
+  document: ['supplier_dev', 'supplier_tester', 'supplier_pm', 'it_member', 'it_pm'],
+}
+
+const EDIT_MODULE_ROLES = {
+  requirement: ['requester', 'it_member', 'it_pm'],
+  task: ['supplier_pm', 'it_member', 'it_pm'],
+  defect: ['supplier_tester', 'supplier_pm', 'it_member'],
+  document: ['supplier_pm', 'it_member', 'it_pm'],
+}
+
 export function usePermission() {
   const authStore = useAuthStore()
 
   const role = computed(() => authStore.currentRole)
+  const roles = computed(() => authStore.roles ?? [])
   const userType = computed(() => authStore.userType)
   const isSuperAdmin = computed(() => authStore.isSuperAdmin)
 
-  // ===== 菜单可见性 =====
-
-  // 完整菜单配置
-  const fullMenuItems = [
-    { index: '/dashboard', title: '首页', icon: 'HomeFilled', minRole: 'member' },
-    { index: '/projects', title: '项目管理', icon: 'Folder', minRole: 'member' },
-    { index: '/requirements', title: '需求管理', icon: 'Document', minRole: 'member' },
-    { index: '/tasks', title: '任务管理', icon: 'List', minRole: 'member' },
-    { index: '/defects', title: '缺陷管理', icon: 'Warning', minRole: 'member' },
-    { index: '/documents', title: '文档管理', icon: 'Files', minRole: 'member' },
-    { index: '/audit-logs', title: '操作日志', icon: 'Tickets', minRole: 'project_manager' },
-    { index: '/organizations', title: '组织架构', icon: 'OfficeBuilding', superAdminOnly: true },
-    { index: '/settings', title: '系统设置', icon: 'Setting', superAdminOnly: true }
-  ]
-
-  // 根据用户角色过滤可见菜单
   const visibleMenuItems = computed(() => {
-    return fullMenuItems.filter((item) => {
-      // 超管拥有所有菜单
-      if (isSuperAdmin.value) return true
+    const activeRoles = isSuperAdmin.value ? ['super_admin'] : roles.value
+    const visiblePaths = new Set(
+      activeRoles.flatMap((roleCode) => ROLE_MENU_PATHS[roleCode] ?? []),
+    )
 
-      // 超管专属菜单
-      if (item.superAdminOnly) return false
-
-      // 按角色过滤
-      if (item.minRole === 'project_manager') {
-        // 操作日志仅内部IT项目经理及以上可见
-        return authStore.isUserType('internal_it') && role.value !== 'member'
-      }
-
-      // 系统用户只能看有限菜单
-      if (authStore.isUserType('system_user')) {
-        return ['/dashboard', '/requirements', '/defects'].includes(item.index)
-      }
-
-      // 供应商开发人员/测试人员精简菜单
-      if (authStore.isUserType('supplier')) {
-        if (role.value === 'developer' || role.value === 'tester') {
-          return ['/dashboard', '/tasks', '/defects', '/documents'].includes(item.index)
-        }
-        // 供应商项目经理
-        if (role.value === 'project_manager') {
-          return !['/audit-logs', '/organizations', '/settings'].includes(item.index)
-        }
-      }
-
-      return true
-    })
+    return MENU_ITEMS.filter((item) => visiblePaths.has(item.index))
   })
 
-  // ===== 操作权限 =====
+  function hasAnyRole(...roleCodes) {
+    return isSuperAdmin.value || roleCodes.some((roleCode) => roles.value.includes(roleCode))
+  }
+
+  function hasModulePermission(permissionMap, module) {
+    return isSuperAdmin.value || (permissionMap[module] ?? []).some((roleCode) => roles.value.includes(roleCode))
+  }
 
   function canCreate(module) {
-    if (isSuperAdmin.value) return true
-    if (authStore.isUserType('system_user')) {
-      return ['requirement', 'defect'].includes(module)
-    }
-    if (authStore.isUserType('supplier') && role.value !== 'project_manager') {
-      return ['defect'].includes(module)
-    }
-    return authStore.isUserType('internal_it')
+    return hasModulePermission(CREATE_MODULE_ROLES, module)
   }
 
   function canEdit(module) {
-    if (isSuperAdmin.value) return true
-    if (authStore.isUserType('system_user')) {
-      return ['requirement'].includes(module)
-    }
-    return !authStore.isUserType('system_user')
+    return hasModulePermission(EDIT_MODULE_ROLES, module)
   }
 
-  function canDelete(module) {
-    if (isSuperAdmin.value) return true
-    return false
+  function canDelete() {
+    return isSuperAdmin.value
+  }
+
+  function canPerform(resource, action, localAllowed = true) {
+    return Boolean(
+      localAllowed
+      && Array.isArray(resource?.allowed_actions)
+      && resource.allowed_actions.includes(action),
+    )
   }
 
   return {
     role,
+    roles,
     userType,
     isSuperAdmin,
     visibleMenuItems,
+    hasAnyRole,
     canCreate,
     canEdit,
-    canDelete
+    canDelete,
+    canPerform,
   }
 }

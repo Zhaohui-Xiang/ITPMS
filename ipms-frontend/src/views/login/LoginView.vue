@@ -2,34 +2,22 @@
 import { ref, reactive } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { Lock, User } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
-import { changePassword } from '@/api/auth'
+import BrandMark from '@/components/layout/BrandMark.vue'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 
 const loginFormRef = ref(null)
-const passwordFormRef = ref(null)
 const loading = ref(false)
 const showPassword = ref(false)
-const passwordChanging = ref(false)
-
-// 首次登录修改密码弹窗
-const showPasswordDialog = ref(false)
-const showNewPassword = ref(false)
-const showNewPasswordConfirm = ref(false)
 
 const loginForm = reactive({
   username: '',
   password: '',
   remember: false
-})
-
-const passwordForm = reactive({
-  currentPassword: '',
-  newPassword: '',
-  newPasswordConfirmation: ''
 })
 
 const loginRules = {
@@ -40,39 +28,6 @@ const loginRules = {
   password: [
     { required: true, message: '请输入密码', trigger: 'blur' },
     { min: 6, max: 32, message: '密码长度不能少于6位', trigger: 'blur' }
-  ]
-}
-
-const passwordRules = {
-  newPassword: [
-    { required: true, message: '请输入新密码', trigger: 'blur' },
-    { min: 8, message: '密码长度至少 8 位', trigger: 'blur' },
-    {
-      pattern: /^(?=.*[A-Za-z])(?=.*\d).+$/,
-      message: '密码必须包含字母和数字',
-      trigger: 'blur'
-    },
-    {
-      validator: (_rule, value, callback) => {
-        if (value === passwordForm.currentPassword) {
-          callback(new Error('新密码不能与当前密码相同'))
-        }
-        callback()
-      },
-      trigger: 'blur'
-    }
-  ],
-  newPasswordConfirmation: [
-    { required: true, message: '请确认新密码', trigger: 'blur' },
-    {
-      validator: (_rule, value, callback) => {
-        if (value !== passwordForm.newPassword) {
-          callback(new Error('两次输入的密码不一致'))
-        }
-        callback()
-      },
-      trigger: 'blur'
-    }
   ]
 }
 
@@ -93,16 +48,13 @@ async function handleLogin() {
       password: loginForm.password
     })
 
-    // 检查是否需要首次改密
     const userData = response.data?.user || response.data
     if (userData?.must_change_password) {
-      passwordForm.currentPassword = loginForm.password
-      showPasswordDialog.value = true
-      ElMessage.warning('首次登录，请修改密码')
-      return
+      ElMessage.warning('首次登录，请先修改密码')
+    } else {
+      ElMessage.success('登录成功')
     }
 
-    ElMessage.success('登录成功')
     const redirect = route.query.redirect || '/dashboard'
     router.push(redirect)
   } catch (error) {
@@ -122,59 +74,15 @@ async function handleLogin() {
     loading.value = false
   }
 }
-
-// 修改密码并继续登录
-async function handlePasswordChange() {
-  if (!passwordFormRef.value) return
-
-  try {
-    await passwordFormRef.value.validate()
-  } catch {
-    return
-  }
-
-  passwordChanging.value = true
-  try {
-    await changePassword({
-      current_password: passwordForm.currentPassword,
-      new_password: passwordForm.newPassword,
-      new_password_confirmation: passwordForm.newPasswordConfirmation
-    })
-
-    ElMessage.success('密码修改成功，正在进入系统...')
-    showPasswordDialog.value = false
-
-    // 短暂延迟后跳转
-    setTimeout(() => {
-      const redirect = route.query.redirect || '/dashboard'
-      router.push(redirect)
-    }, 800)
-  } catch (error) {
-    const message = error.response?.data?.message || '修改密码失败，请重试'
-    ElMessage.error(message)
-  } finally {
-    passwordChanging.value = false
-  }
-}
 </script>
 
 <template>
   <div class="login-page">
-    <!-- 背景装饰 -->
-    <div class="login-bg-decoration">
-      <div class="bg-circle bg-circle-1"></div>
-      <div class="bg-circle bg-circle-2"></div>
-      <div class="bg-circle bg-circle-3"></div>
-    </div>
-
     <div class="login-card">
       <!-- Logo + 标题 -->
       <div class="login-header">
-        <div class="login-logo">
-          <el-icon :size="40"><Platform /></el-icon>
-        </div>
-        <h1 class="login-title">IPMS 项目管理系统</h1>
-        <p class="login-subtitle">项目需求开发管理平台</p>
+        <BrandMark />
+        <h1 class="login-title">IT 项目管理系统</h1>
       </div>
 
       <!-- 登录表单 -->
@@ -239,92 +147,6 @@ async function handlePasswordChange() {
         <span>忘记密码？请联系系统管理员</span>
       </div>
     </div>
-
-    <!-- 首次登录改密弹窗 -->
-    <el-dialog
-      v-model="showPasswordDialog"
-      title="首次登录 - 修改密码"
-      :close-on-click-modal="false"
-      :close-on-press-escape="false"
-      :show-close="false"
-      width="480px"
-      class="password-dialog"
-    >
-      <div class="password-dialog-hint">
-        <el-icon color="#E6A23C"><WarningFilled /></el-icon>
-        <span>为保证账号安全，首次登录需修改密码</span>
-      </div>
-
-      <el-form
-        ref="passwordFormRef"
-        :model="passwordForm"
-        :rules="passwordRules"
-        label-width="0"
-        class="password-form"
-      >
-        <el-form-item prop="newPassword">
-          <el-input
-            v-model="passwordForm.newPassword"
-            :type="showNewPassword ? 'text' : 'password'"
-            placeholder="请输入新密码（至少8位，含字母和数字）"
-            :prefix-icon="Lock"
-            size="large"
-          >
-            <template #suffix>
-              <el-icon
-                class="password-toggle"
-                @click="showNewPassword = !showNewPassword"
-              >
-                <component :is="showNewPassword ? 'View' : 'Hide'" />
-              </el-icon>
-            </template>
-          </el-input>
-        </el-form-item>
-
-        <el-form-item prop="newPasswordConfirmation">
-          <el-input
-            v-model="passwordForm.newPasswordConfirmation"
-            :type="showNewPasswordConfirm ? 'text' : 'password'"
-            placeholder="请再次输入新密码"
-            :prefix-icon="Lock"
-            size="large"
-          >
-            <template #suffix>
-              <el-icon
-                class="password-toggle"
-                @click="showNewPasswordConfirm = !showNewPasswordConfirm"
-              >
-                <component :is="showNewPasswordConfirm ? 'View' : 'Hide'" />
-              </el-icon>
-            </template>
-          </el-input>
-        </el-form-item>
-
-        <!-- 密码强度提示 -->
-        <div class="password-strength">
-          <span class="strength-label">密码要求：</span>
-          <ul class="strength-rules">
-            <li :class="{ met: passwordForm.newPassword.length >= 8 }">至少 8 个字符</li>
-            <li :class="{ met: /[A-Za-z]/.test(passwordForm.newPassword) }">包含字母</li>
-            <li :class="{ met: /\d/.test(passwordForm.newPassword) }">包含数字</li>
-          </ul>
-        </div>
-      </el-form>
-
-      <template #footer>
-        <div class="dialog-footer">
-          <el-button
-            type="primary"
-            size="large"
-            :loading="passwordChanging"
-            class="password-submit-btn"
-            @click="handlePasswordChange"
-          >
-            {{ passwordChanging ? '修改中...' : '确认修改并登录' }}
-          </el-button>
-        </div>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -335,52 +157,18 @@ async function handlePasswordChange() {
   align-items: center;
   justify-content: center;
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: $color-canvas;
   overflow: hidden;
-}
-
-// 背景装饰圆形
-.login-bg-decoration {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-
-  .bg-circle {
-    position: absolute;
-    border-radius: 50%;
-    opacity: 0.1;
-    background: #fff;
-
-    &.bg-circle-1 {
-      width: 400px;
-      height: 400px;
-      top: -100px;
-      right: -100px;
-    }
-
-    &.bg-circle-2 {
-      width: 300px;
-      height: 300px;
-      bottom: -80px;
-      left: -80px;
-    }
-
-    &.bg-circle-3 {
-      width: 200px;
-      height: 200px;
-      top: 50%;
-      left: 10%;
-    }
-  }
 }
 
 .login-card {
   position: relative;
   width: 420px;
   background: #fff;
-  border-radius: $border-radius-lg;
+  border: 1px solid $color-border;
+  border-radius: $border-radius-md;
   padding: 44px 40px 36px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 12px 32px rgba(23, 33, 43, 0.1);
   z-index: 1;
 }
 
@@ -388,31 +176,14 @@ async function handlePasswordChange() {
   text-align: center;
   margin-bottom: 36px;
 
-  .login-logo {
-    width: 64px;
-    height: 64px;
-    background: linear-gradient(135deg, #667eea, #409EFF);
-    border-radius: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #fff;
+  :deep(.brand-mark) {
     margin: 0 auto 18px;
-    box-shadow: 0 4px 12px rgba(64, 158, 255, 0.35);
   }
 
   .login-title {
-    font-size: 24px;
-    font-weight: 700;
-    color: $gray-900;
-    margin-bottom: 6px;
-    letter-spacing: 2px;
-  }
-
-  .login-subtitle {
-    font-size: $font-size-small;
-    color: $gray-500;
-    letter-spacing: 4px;
+    color: $color-ink;
+    font-size: $font-size-h2;
+    font-weight: 600;
   }
 }
 
@@ -460,13 +231,14 @@ async function handlePasswordChange() {
   height: 46px;
   font-size: 16px;
   font-weight: 500;
-  letter-spacing: 6px;
+  letter-spacing: 0;
   border-radius: 8px;
-  background: linear-gradient(135deg, #667eea, #409EFF);
-  border: none;
+  background: $color-primary;
+  border-color: $color-primary;
 
   &:hover {
-    background: linear-gradient(135deg, #5a6fd6, #3a8ee6);
+    background: $color-primary-hover;
+    border-color: $color-primary-hover;
   }
 }
 
@@ -478,90 +250,12 @@ async function handlePasswordChange() {
   line-height: 1.5;
 }
 
-// 改密弹窗
-.password-dialog {
-  :deep(.el-dialog__header) {
-    padding: 20px 24px 0;
-  }
-
-  :deep(.el-dialog__body) {
-    padding: 20px 24px;
-  }
-
-  :deep(.el-dialog__footer) {
-    padding: 0 24px 20px;
-  }
-}
-
-.password-dialog-hint {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-  background: #fef7e0;
-  border-radius: 6px;
-  margin-bottom: 20px;
-  font-size: $font-size-small;
-  color: #5f4b00;
-}
-
-.password-form {
-  :deep(.el-input--large) {
-    height: 44px;
-  }
-}
-
-.password-strength {
-  margin-top: -8px;
-  margin-bottom: 8px;
-
-  .strength-label {
-    font-size: $font-size-caption;
-    color: $gray-500;
-    display: block;
-    margin-bottom: 6px;
-  }
-
-  .strength-rules {
-    list-style: none;
-    padding: 0;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-
-    li {
-      font-size: $font-size-caption;
-      color: $gray-500;
-      padding: 2px 10px;
-      border-radius: 9999px;
-      background: $gray-100;
-      transition: all 0.3s;
-
-      &.met {
-        color: $color-success;
-        background: #e6f4ea;
-      }
-    }
-  }
-}
-
-.dialog-footer {
-  text-align: center;
-}
-
-.password-submit-btn {
-  width: 100%;
-  height: 44px;
-  font-size: 15px;
-  letter-spacing: 2px;
-}
-
 // 响应式
 @media (max-width: 480px) {
   .login-card {
     width: 92%;
     padding: 32px 24px 28px;
-    border-radius: 12px;
+    border-radius: $border-radius-md;
   }
 
   .login-header .login-title {

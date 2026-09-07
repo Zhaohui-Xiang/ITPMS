@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSidebarStore } from '@/stores/sidebar'
 import { usePermission } from '@/composables/usePermission'
+import BrandMark from './BrandMark.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,7 +20,6 @@ const activeMenu = computed(() => {
   if (path.startsWith('/documents')) return '/documents'
   if (path.startsWith('/organizations')) return '/organizations'
   if (path.startsWith('/audit-logs')) return '/audit-logs'
-  if (path.startsWith('/settings')) return '/settings'
   return path
 })
 
@@ -35,23 +35,16 @@ function handleSelect(index) {
     :class="{ collapsed: sidebarStore.collapsed }"
   >
     <!-- Logo 区域 -->
-    <div class="sidebar-logo">
-      <div class="logo-icon">
-        <el-icon :size="24"><component :is="'Platform'" /></el-icon>
-      </div>
-      <transition name="fade">
-        <span v-show="!sidebarStore.collapsed" class="logo-text">IPMS</span>
-      </transition>
-    </div>
+    <div class="sidebar-logo"><BrandMark :compact="sidebarStore.collapsed" /></div>
 
     <!-- 菜单 -->
     <el-menu
       :default-active="activeMenu"
       :collapse="sidebarStore.collapsed"
       :collapse-transition="false"
-      background-color="#304156"
-      text-color="#bfcbd9"
-      active-text-color="#409EFF"
+      background-color="#ffffff"
+      text-color="#667482"
+      active-text-color="#00467f"
       router
       class="sidebar-menu"
       @select="handleSelect"
@@ -67,11 +60,18 @@ function handleSelect(index) {
     </el-menu>
 
     <!-- 折叠按钮 -->
-    <div class="sidebar-collapse-btn" @click="sidebarStore.toggleCollapse()">
-      <el-icon :size="18">
-        <component :is="sidebarStore.collapsed ? 'Expand' : 'Fold'" />
-      </el-icon>
-    </div>
+    <el-tooltip :content="sidebarStore.collapsed ? '展开导航' : '收起导航'" placement="right">
+      <button
+        type="button"
+        class="sidebar-collapse-btn"
+        :aria-label="sidebarStore.collapsed ? '展开导航' : '收起导航'"
+        @click="sidebarStore.toggleCollapse()"
+      >
+        <el-icon :size="18">
+          <component :is="sidebarStore.collapsed ? 'Expand' : 'Fold'" />
+        </el-icon>
+      </button>
+    </el-tooltip>
   </div>
 </template>
 
@@ -82,7 +82,8 @@ function handleSelect(index) {
   top: 0;
   bottom: 0;
   width: $sidebar-width;
-  background-color: #304156;
+  background-color: #fff;
+  border-right: 1px solid $color-border;
   display: flex;
   flex-direction: column;
   transition: width 0.3s ease;
@@ -100,27 +101,11 @@ function handleSelect(index) {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid $color-border;
   flex-shrink: 0;
 
-  .logo-icon {
-    width: 32px;
-    height: 32px;
-    background: $color-primary;
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #fff;
-    flex-shrink: 0;
-  }
-
-  .logo-text {
-    font-size: 18px;
-    font-weight: 700;
-    color: #fff;
-    white-space: nowrap;
-    letter-spacing: 2px;
+  .collapsed & {
+    padding: 0;
   }
 }
 
@@ -138,27 +123,44 @@ function handleSelect(index) {
   .el-menu-item {
     border-left: 3px solid transparent;
 
+    &:hover {
+      background: $color-primary-soft;
+    }
+
     &.is-active {
       border-left-color: $color-primary;
+      background: $color-primary-soft;
     }
   }
 }
 
 .sidebar-collapse-btn {
+  width: 100%;
   height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #bfcbd9;
+  border: 0;
+  color: $color-muted;
+  background: #fff;
   cursor: pointer;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid $color-border;
   flex-shrink: 0;
-  transition: color 0.2s;
+  transition: color 0.2s, background-color 0.2s;
 
   &:hover {
-    color: #fff;
-    background-color: rgba(255, 255, 255, 0.05);
+    color: $color-primary;
+    background-color: $color-primary-soft;
   }
+}
+
+:deep(.el-menu--collapse) {
+  width: 100%;
+}
+
+:deep(.el-menu-item) {
+  height: 44px;
+  line-height: 44px;
 }
 
 // 过渡动画

@@ -1,45 +1,68 @@
 <script setup>
-import { useRouter } from 'vue-router'
+import { ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSidebarStore } from '@/stores/sidebar'
+import GlobalSearch from './GlobalSearch.vue'
+import ProfileDialog from '@/components/common/ProfileDialog.vue'
 
-const router = useRouter()
 const authStore = useAuthStore()
 const sidebarStore = useSidebarStore()
+const profileDialogVisible = ref(false)
 
 function handleLogout() {
   authStore.logout()
 }
 
-function handleProfile() {
-  router.push('/profile')
+function handleCommand(command) {
+  if (command === 'profile') {
+    profileDialogVisible.value = true
+  }
+  if (command === 'logout') {
+    handleLogout()
+  }
+}
+
+function handleDialogVisibility(value) {
+  if (!authStore.mustChangePassword) {
+    profileDialogVisible.value = value
+  }
 }
 </script>
 
 <template>
   <div class="header-bar">
     <div class="header-left">
-      <!-- 折叠按钮 -->
-      <div class="collapse-btn" @click="sidebarStore.toggleCollapse()">
-        <el-icon :size="20">
-          <component :is="sidebarStore.collapsed ? 'Expand' : 'Fold'" />
-        </el-icon>
-      </div>
+      <el-tooltip :content="sidebarStore.collapsed ? '展开导航' : '收起导航'">
+        <el-button
+          text
+          class="collapse-btn"
+          :aria-label="sidebarStore.collapsed ? '展开导航' : '收起导航'"
+          @click="sidebarStore.toggleCollapse()"
+        >
+          <el-icon :size="20">
+            <component :is="sidebarStore.collapsed ? 'Expand' : 'Fold'" />
+          </el-icon>
+        </el-button>
+      </el-tooltip>
+      <GlobalSearch />
     </div>
 
     <div class="header-right">
-      <!-- 通知铃铛 -->
-      <el-badge :value="3" :max="99" class="notification-badge">
-        <el-button link class="header-icon-btn">
-          <el-icon :size="20"><Bell /></el-icon>
-        </el-button>
+      <el-badge :value="0" :show-zero="true" :max="99" class="notification-badge">
+        <el-tooltip content="站内通知">
+          <el-button text class="header-icon-btn" aria-label="站内通知">
+            <el-icon :size="20"><Bell /></el-icon>
+          </el-button>
+        </el-tooltip>
       </el-badge>
 
-      <!-- 用户下拉 -->
-      <el-dropdown trigger="click" @command="(cmd) => { if (cmd === 'logout') handleLogout(); if (cmd === 'profile') handleProfile(); }">
+      <el-dropdown trigger="click" @command="handleCommand">
         <div class="user-info">
           <el-avatar :size="32" icon="UserFilled" />
-          <span class="user-name">{{ authStore.userName || '未登录' }}</span>
+          <span class="user-copy">
+            <span class="user-name">{{ authStore.userName || '未登录' }}</span>
+            <span class="user-role">{{ authStore.currentRole }}</span>
+          </span>
           <el-icon class="dropdown-icon"><ArrowDown /></el-icon>
         </div>
         <template #dropdown>
@@ -56,33 +79,36 @@ function handleProfile() {
         </template>
       </el-dropdown>
     </div>
+
+    <ProfileDialog
+      :model-value="profileDialogVisible || authStore.mustChangePassword"
+      :force-password-change="authStore.mustChangePassword"
+      @update:model-value="handleDialogVisibility"
+    />
   </div>
 </template>
 
 <style scoped lang="scss">
 .header-bar {
-  position: fixed;
+  position: sticky;
   top: 0;
-  right: 0;
-  left: $sidebar-width;
+  width: 100%;
   height: $header-height;
   background: #fff;
-  border-bottom: 1px solid $gray-200;
+  border-bottom: 1px solid $color-border;
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
   padding: 0 20px;
   z-index: 1000;
-  transition: left 0.3s ease;
-
-  .collapsed & {
-    left: $sidebar-collapsed-width;
-  }
+  gap: 20px;
 }
 
 .header-left {
   display: flex;
   align-items: center;
+  gap: 16px;
 }
 
 .collapse-btn {
@@ -91,7 +117,6 @@ function handleProfile() {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
   cursor: pointer;
   color: $gray-700;
   transition: all 0.2s;
@@ -119,7 +144,7 @@ function handleProfile() {
   border-radius: 4px;
 
   &:hover {
-    background-color: $gray-100;
+    background-color: $color-primary-soft;
     color: $color-primary;
   }
 }
@@ -134,16 +159,29 @@ function handleProfile() {
   transition: background-color 0.2s;
 
   &:hover {
-    background-color: $gray-100;
+    background-color: $color-primary-soft;
+  }
+
+  .user-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
   }
 
   .user-name {
-    font-size: $font-size-body;
-    color: $gray-700;
+    color: $color-ink;
+    font-size: $font-size-small;
+    font-weight: 600;
     max-width: 100px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .user-role {
+    color: $color-muted;
+    font-size: 11px;
+    line-height: 14px;
   }
 
   .dropdown-icon {

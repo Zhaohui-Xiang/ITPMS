@@ -10,84 +10,86 @@ const routes = [
   },
   {
     path: '/',
+    name: 'OperationsShell',
+    component: () => import('@/components/layout/AppLayout.vue'),
     redirect: '/dashboard',
-    meta: { requiresAuth: true }
-  },
-  {
-    path: '/dashboard',
-    name: 'Dashboard',
-    component: () => import('@/views/dashboard/DashboardView.vue'),
-    meta: { requiresAuth: true, title: '首页', icon: 'HomeFilled' }
-  },
-  {
-    path: '/projects',
-    name: 'ProjectList',
-    component: () => import('@/views/projects/ProjectList.vue'),
-    meta: { requiresAuth: true, title: '项目管理', icon: 'Folder' }
-  },
-  {
-    path: '/projects/:id',
-    name: 'ProjectDetail',
-    component: () => import('@/views/projects/ProjectDetail.vue'),
-    meta: { requiresAuth: true, title: '项目详情' }
-  },
-  {
-    path: '/requirements',
-    name: 'RequirementList',
-    component: () => import('@/views/requirements/RequirementList.vue'),
-    meta: { requiresAuth: true, title: '需求管理', icon: 'Document' }
-  },
-  {
-    path: '/requirements/:id',
-    name: 'RequirementDetail',
-    component: () => import('@/views/requirements/RequirementDetail.vue'),
-    meta: { requiresAuth: true, title: '需求详情' }
-  },
-  {
-    path: '/tasks',
-    name: 'TaskList',
-    component: () => import('@/views/tasks/TaskList.vue'),
-    meta: { requiresAuth: true, title: '任务管理', icon: 'List' }
-  },
-  {
-    path: '/defects',
-    name: 'DefectList',
-    component: () => import('@/views/defects/DefectList.vue'),
-    meta: { requiresAuth: true, title: '缺陷管理', icon: 'Warning' }
-  },
-  {
-    path: '/documents',
-    name: 'DocumentView',
-    component: () => import('@/views/documents/DocumentView.vue'),
-    meta: { requiresAuth: true, title: '文档管理', icon: 'Files' }
-  },
-  {
-    path: '/organizations',
-    name: 'OrganizationView',
-    component: () => import('@/views/organizations/OrganizationView.vue'),
-    meta: {
-      requiresAuth: true,
-      title: '组织架构',
-      icon: 'OfficeBuilding',
-      requiresSuperAdmin: true
-    }
-  },
-  {
-    path: '/audit-logs',
-    name: 'AuditLogView',
-    component: () => import('@/views/audit/AuditLogView.vue'),
-    meta: { requiresAuth: true, title: '操作日志', icon: 'Tickets' }
-  },
-  {
-    path: '/settings',
-    name: 'SettingsView',
-    component: () => import('@/views/settings/SettingsView.vue'),
-    meta: {
-      requiresAuth: true,
-      title: '系统设置',
-      icon: 'Setting',
-      requiresSuperAdmin: true
-    }
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: 'dashboard',
+        name: 'Dashboard',
+        component: () => import('@/views/dashboard/DashboardView.vue'),
+        meta: { title: '工作台', icon: 'HomeFilled' },
+      },
+      {
+        path: 'projects',
+        name: 'ProjectList',
+        component: () => import('@/views/projects/ProjectList.vue'),
+        meta: { title: '项目管理', icon: 'Folder' },
+      },
+      {
+        path: 'projects/:id',
+        name: 'ProjectDetail',
+        component: () => import('@/views/projects/ProjectDetail.vue'),
+        meta: { title: '项目详情' },
+      },
+      {
+        path: 'projects/:projectId/versions',
+        name: 'ProjectVersions',
+        redirect: (to) => ({
+          name: 'ProjectDetail',
+          params: { id: to.params.projectId },
+          query: { tab: 'versions' },
+        }),
+        meta: { title: '发布版本' },
+      },
+      {
+        path: 'requirements',
+        name: 'RequirementList',
+        component: () => import('@/views/requirements/RequirementList.vue'),
+        meta: { title: '需求管理', icon: 'Document' },
+      },
+      {
+        path: 'requirements/:id',
+        name: 'RequirementDetail',
+        component: () => import('@/views/requirements/RequirementDetail.vue'),
+        meta: { title: '需求详情' },
+      },
+      {
+        path: 'tasks',
+        name: 'TaskList',
+        component: () => import('@/views/tasks/TaskList.vue'),
+        meta: { title: '任务管理', icon: 'List' },
+      },
+      {
+        path: 'defects',
+        name: 'DefectList',
+        component: () => import('@/views/defects/DefectList.vue'),
+        meta: { title: '缺陷管理', icon: 'Warning' },
+      },
+      {
+        path: 'documents',
+        name: 'DocumentView',
+        component: () => import('@/views/documents/DocumentView.vue'),
+        meta: { title: '文档管理', icon: 'Files' },
+      },
+      {
+        path: 'audit-logs',
+        name: 'AuditLogView',
+        component: () => import('@/views/audit/AuditLogView.vue'),
+        meta: { title: '审计日志', icon: 'Tickets' },
+      },
+      {
+        path: 'organizations',
+        name: 'OrganizationView',
+        component: () => import('@/views/organizations/OrganizationView.vue'),
+        meta: {
+          title: '组织架构',
+          icon: 'OfficeBuilding',
+          requiresSuperAdmin: true,
+        },
+      },
+    ],
   },
   // 错误页面路由
   {
@@ -112,8 +114,7 @@ const router = createRouter({
 
 // ===== 全局导航守卫 =====
 router.beforeEach(async (to, from, next) => {
-  // 设置页面标题
-  document.title = to.meta.title ? `${to.meta.title} - IPMS` : 'IPMS 项目管理系统'
+  document.title = to.meta.title ? `${to.meta.title} - Voltage IPMS` : 'Voltage IPMS'
 
   const authStore = useAuthStore()
 
@@ -135,6 +136,10 @@ router.beforeEach(async (to, from, next) => {
       // 未登录，跳转登录页
       return next({ path: '/login', query: { redirect: to.fullPath } })
     }
+  }
+
+  if (authStore.mustChangePassword && to.name !== 'Dashboard') {
+    return next('/dashboard')
   }
 
   // 检查超管权限

@@ -32,7 +32,7 @@ const sidebarStore = useSidebarStore()
 
       <!-- 底部状态栏 -->
       <div class="footer-bar">
-        <span>Copyright &copy; 2026 IPMS. All rights reserved.</span>
+        <span>Voltage IPMS</span>
       </div>
     </div>
   </div>
@@ -42,16 +42,20 @@ const sidebarStore = useSidebarStore()
 .app-layout {
   display: flex;
   height: 100vh;
+  min-width: 1024px;
   overflow: hidden;
+  background: $color-canvas;
 }
 
 .main-area {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   margin-left: $sidebar-width;
   transition: margin-left 0.3s ease;
   overflow: hidden;
+  background: $color-canvas;
 
   &.collapsed {
     margin-left: $sidebar-collapsed-width;
@@ -63,13 +67,13 @@ const sidebarStore = useSidebarStore()
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  padding-top: $header-height;
 }
 
 .content-main {
   flex: 1;
   overflow-y: auto;
   padding: 0 0 16px 0;
+  background: $color-canvas;
 }
 
 .footer-bar {
@@ -77,9 +81,9 @@ const sidebarStore = useSidebarStore()
   line-height: $footer-height;
   text-align: center;
   font-size: $font-size-caption;
-  color: $gray-500;
+  color: $color-muted;
   background: #fff;
-  border-top: 1px solid $gray-200;
+  border-top: 1px solid $color-border;
   flex-shrink: 0;
 }
 </style>
