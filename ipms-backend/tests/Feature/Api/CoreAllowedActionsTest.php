@@ -50,7 +50,7 @@ class CoreAllowedActionsTest extends TestCase
             'supplier_pm' => [],
             'supplier_dev' => [],
             'supplier_tester' => [],
-            'superadmin' => ['edit', 'archive'],
+            'superadmin' => ['edit', 'archive', 'delete'],
         ];
 
         foreach ($expected as $actor => $actions) {

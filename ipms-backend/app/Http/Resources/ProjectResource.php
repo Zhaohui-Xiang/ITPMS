@@ -61,6 +61,9 @@ final class ProjectResource extends JsonResource
         if (Gate::forUser($user)->allows('archive', $this->resource)) {
             $actions[] = 'archive';
         }
+        if (Gate::forUser($user)->allows('delete', $this->resource)) {
+            $actions[] = 'delete';
+        }
         if (Gate::forUser($user)->allows('create', [ProjectVersion::class, $this->resource])) {
             $actions[] = 'create_version';
         }
