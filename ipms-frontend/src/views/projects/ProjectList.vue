@@ -15,6 +15,7 @@ const {
   page,
   pageSize,
   total,
+  totalPages,
   requestParams,
   applyPagination,
   setPage,
@@ -57,8 +58,17 @@ async function fetchProjects() {
   try {
     const response = await listProjects(buildParams())
     const payload = response?.data?.data ?? {}
-    projects.value = payload.items ?? []
+    const items = payload.items ?? []
     applyPagination(payload)
+    const lastPage = Math.max(totalPages.value, 1)
+
+    if (items.length === 0 && page.value > lastPage) {
+      setPage(lastPage)
+      await fetchProjects()
+      return
+    }
+
+    projects.value = items
   } catch (requestError) {
     projects.value = []
     error.value = mapApiError(requestError)

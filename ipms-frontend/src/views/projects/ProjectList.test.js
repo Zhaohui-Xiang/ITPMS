@@ -73,14 +73,14 @@ const stubs = {
   Delete: true,
 }
 
-const response = (items) => ({
+const response = (items, pagination = {}) => ({
   data: {
     data: {
       items,
-      page: 1,
-      page_size: 20,
-      total: items.length,
-      total_pages: 1,
+      page: pagination.page ?? 1,
+      page_size: pagination.page_size ?? 20,
+      total: pagination.total ?? items.length,
+      total_pages: pagination.total_pages ?? 1,
     },
   },
 })
@@ -132,6 +132,33 @@ describe('ProjectList real data workflow', () => {
     await flushPromises()
     expect(deleteProject).toHaveBeenCalledWith(17)
     expect(listProjects).toHaveBeenCalledTimes(3)
+  })
+
+  it('reloads the last valid page when an action empties the current page', async () => {
+    listProjects
+      .mockResolvedValueOnce(response([project()], {
+        page: 2,
+        total: 21,
+        total_pages: 2,
+      }))
+      .mockResolvedValueOnce(response([], {
+        page: 2,
+        total: 20,
+        total_pages: 1,
+      }))
+      .mockResolvedValueOnce(response([project([])], {
+        page: 1,
+        total: 20,
+        total_pages: 1,
+      }))
+
+    const wrapper = mountList()
+    await flushPromises()
+    await wrapper.get('[data-testid="delete-17"]').trigger('click')
+    await flushPromises()
+
+    expect(listProjects).toHaveBeenNthCalledWith(2, { page: 2, page_size: 20 })
+    expect(listProjects).toHaveBeenNthCalledWith(3, { page: 1, page_size: 20 })
   })
 
   it('hides state-changing commands absent from the server action list', async () => {
