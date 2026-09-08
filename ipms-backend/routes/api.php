@@ -38,6 +38,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Dashboard
     // ========================================================================
     Route::prefix('dashboard')->group(function () {
+        Route::get('/summary', [DashboardController::class, 'summary']);
         Route::get('/stats', [DashboardController::class, 'stats']);
         Route::get('/recent-requirements', [DashboardController::class, 'recentRequirements']);
         Route::get('/recent-tasks', [DashboardController::class, 'recentTasks']);

@@ -1,187 +1,413 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { ArrowRight, Calendar } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
-import StatusTag from '@/components/common/StatusTag.vue'
+import { getDashboardSummary } from '@/api/dashboard'
+import AsyncState from '@/components/common/AsyncState.vue'
 
+const router = useRouter()
 const authStore = useAuthStore()
 
-const welcomeText = computed(() => {
-  const hour = new Date().getHours()
-  if (hour < 6) return '夜深了'
-  if (hour < 9) return '早上好'
-  if (hour < 12) return '上午好'
-  if (hour < 14) return '中午好'
-  if (hour < 18) return '下午好'
-  return '晚上好'
+const loading = ref(true)
+const error = ref(null)
+const summary = ref({
+  metrics: [],
+  priority_queue: [],
+  release_risks: [],
 })
 
-// Mock 统计数据
-const statsCards = ref([
-  { title: '我的需求', value: 12, color: '#409EFF', icon: 'Document' },
-  { title: '待处理任务', value: 5, color: '#E6A23C', icon: 'List' },
-  { title: '待确认缺陷', value: 2, color: '#F56C6C', icon: 'Warning' },
-  { title: '即将到期', value: 3, color: '#FF6D00', icon: 'Clock' }
-])
-
-// Mock 近期需求
-const recentRequirements = ref([
-  { id: 1, title: '新增财务报表功能', project: 'SAP B1', status: 'developing', priority: '高', date: '2026-08-02' },
-  { id: 2, title: '采购订单审批流优化', project: 'Weaver OA', status: 'pending_review', priority: '中', date: '2026-08-01' },
-  { id: 3, title: '订单同步接口对接', project: 'VPMS', status: 'assigned', priority: '紧急', date: '2026-07-30' },
-  { id: 4, title: 'CRM客户标签管理', project: 'Salesforce', status: 'online', priority: '低', date: '2026-07-28' },
-  { id: 5, title: '库存盘点功能开发', project: 'SAP B1', status: 'testing', priority: '高', date: '2026-07-25' }
-])
-
-// Mock 近期任务
-const recentTasks = ref([
-  { id: 1, title: '财务报表模板开发', project: 'SAP B1', status: 'in_progress', priority: '高', dueDate: '2026-08-05' },
-  { id: 2, title: '审批流后端开发', project: 'Weaver OA', status: 'in_progress', priority: '中', dueDate: '2026-08-10' },
-  { id: 3, title: '接口文档编写', project: 'VPMS', status: 'done', priority: '低', dueDate: '2026-07-28' },
-  { id: 4, title: '数据查询接口', project: 'SAP B1', status: 'todo', priority: '高', dueDate: '2026-08-12' },
-  { id: 5, title: '报表导出功能', project: 'SAP B1', status: 'todo', priority: '中', dueDate: '2026-08-15' }
-])
-
-// 优先级标签类型
-function getPriorityTag(priority) {
-  const map = { '紧急': 'danger', '高': 'warning', '中': '', '低': 'info' }
-  return map[priority] || 'info'
+const roleLabels = {
+  super_admin: '超级管理员',
+  it_pm: '内部 IT 项目经理',
+  it_member: '内部 IT 项目成员',
+  supplier_pm: '供应商项目经理',
+  supplier_dev: '供应商开发人员',
+  supplier_tester: '供应商测试人员',
+  requester: '系统用户',
 }
+
+const typeLabels = {
+  requirement: '需求',
+  task: '任务',
+  defect: '缺陷',
+  project_version: '版本',
+}
+
+const severityLabels = {
+  critical: '紧急',
+  high: '高',
+  medium: '中',
+  low: '低',
+}
+
+const currentRoleLabel = computed(() => (
+  roleLabels[authStore.currentRole] ?? authStore.currentRole
+))
+
+async function loadSummary() {
+  loading.value = true
+  error.value = null
+
+  try {
+    const response = await getDashboardSummary()
+    summary.value = response.data.data
+  } catch (requestError) {
+    error.value = requestError
+  } finally {
+    loading.value = false
+  }
+}
+
+function navigate(targetUrl) {
+  if (targetUrl) {
+    router.push(targetUrl)
+  }
+}
+
+function severityType(severity) {
+  return {
+    critical: 'danger',
+    high: 'warning',
+    medium: '',
+    low: 'info',
+  }[severity] ?? 'info'
+}
+
+function formatDate(value) {
+  return value ? String(value).slice(0, 10) : ''
+}
+
+onMounted(loadSummary)
 </script>
 
 <template>
-  <div class="page-container">
-    <!-- 欢迎区 -->
-    <div class="welcome-section">
-      <div class="welcome-text">
-        <h2 class="page-title">{{ welcomeText }}，{{ authStore.userName || '用户' }}</h2>
-        <p class="page-description">
-          当前角色：<el-tag size="small" type="primary">{{ authStore.currentRole === 'super_admin' ? '超级管理员' : authStore.currentRole }}</el-tag>
-          &nbsp;|&nbsp; 用户类型：<el-tag size="small">{{ authStore.userType || '内部 IT' }}</el-tag>
-        </p>
+  <div class="dashboard-page">
+    <header class="page-heading">
+      <div>
+        <h1>工作台</h1>
+        <p>当前职责范围内的待办与发布风险</p>
       </div>
-    </div>
+      <el-tag
+        data-testid="dashboard-role"
+        effect="plain"
+        size="small"
+      >
+        {{ currentRoleLabel }}
+      </el-tag>
+    </header>
 
-    <!-- 统计卡片 -->
-    <el-row :gutter="16" class="stats-row">
-      <el-col :span="6" v-for="card in statsCards" :key="card.title">
-        <el-card shadow="hover" class="stat-card">
-          <div class="stat-card-content">
-            <div class="stat-card-info">
-              <div class="stat-card-value">{{ card.value }}</div>
-              <div class="stat-card-title">{{ card.title }}</div>
+    <AsyncState
+      :loading="loading"
+      :error="error"
+      @retry="loadSummary"
+    >
+      <section
+        v-if="summary.metrics.length"
+        class="metric-strip"
+        aria-label="工作台指标"
+      >
+        <button
+          v-for="metric in summary.metrics"
+          :key="metric.key"
+          :data-testid="`metric-${metric.key}`"
+          class="metric-tile"
+          type="button"
+          @click="navigate(metric.target_url)"
+        >
+          <span class="metric-value">{{ metric.value }}</span>
+          <span class="metric-label">{{ metric.label }}</span>
+        </button>
+      </section>
+
+      <div class="work-grid">
+        <section class="work-band" aria-labelledby="priority-heading">
+          <header class="band-heading">
+            <div>
+              <h2 id="priority-heading">优先处理</h2>
+              <span>{{ summary.priority_queue.length }} 项</span>
             </div>
-            <div
-              class="stat-card-icon"
-              :style="{ backgroundColor: card.color + '1a', color: card.color }"
+          </header>
+
+          <ul v-if="summary.priority_queue.length" class="queue-list">
+            <li
+              v-for="item in summary.priority_queue"
+              :key="`${item.type}-${item.id}`"
+              class="queue-item"
             >
-              <el-icon :size="28"><component :is="card.icon" /></el-icon>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
+              <div class="queue-copy">
+                <div class="queue-meta">
+                  <el-tag :type="severityType(item.severity)" size="small">
+                    {{ severityLabels[item.severity] ?? item.severity }}
+                  </el-tag>
+                  <span>{{ typeLabels[item.type] ?? item.type }}</span>
+                  <span v-if="item.project">{{ item.project }}</span>
+                </div>
+                <strong>{{ item.title }}</strong>
+                <span v-if="item.due_at" class="queue-date">
+                  <el-icon><Calendar /></el-icon>
+                  {{ formatDate(item.due_at) }}
+                </span>
+              </div>
+              <el-button
+                :data-testid="`queue-link-${item.type}-${item.id}`"
+                class="queue-link"
+                text
+                circle
+                :aria-label="`打开${item.title}`"
+                @click="navigate(item.target_url)"
+              >
+                <el-icon><ArrowRight /></el-icon>
+              </el-button>
+            </li>
+          </ul>
+          <el-empty v-else description="暂无优先事项" :image-size="72" />
+        </section>
 
-    <!-- 近期数据表格 -->
-    <el-row :gutter="16" class="tables-row">
-      <!-- 近期需求 -->
-      <el-col :span="12">
-        <el-card shadow="hover" class="content-card">
-          <template #header>
-            <div class="card-header">
-              <span>近期需求</span>
-              <el-button text type="primary" @click="$router.push('/requirements')">查看全部</el-button>
+        <section class="work-band work-band--risk" aria-labelledby="risk-heading">
+          <header class="band-heading">
+            <div>
+              <h2 id="risk-heading">发布风险</h2>
+              <span>{{ summary.release_risks.length }} 项</span>
             </div>
-          </template>
-          <el-table :data="recentRequirements" size="small" stripe>
-            <el-table-column prop="title" label="标题" min-width="160" show-overflow-tooltip />
-            <el-table-column prop="project" label="项目" width="100" />
-            <el-table-column label="状态" width="90">
-              <template #default="{ row }">
-                <StatusTag type="requirement" :status="row.status" />
-              </template>
-            </el-table-column>
-            <el-table-column label="优先级" width="70">
-              <template #default="{ row }">
-                <el-tag :type="getPriorityTag(row.priority)" size="small">{{ row.priority }}</el-tag>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-col>
+          </header>
 
-      <!-- 近期任务 -->
-      <el-col :span="12">
-        <el-card shadow="hover" class="content-card">
-          <template #header>
-            <div class="card-header">
-              <span>近期任务</span>
-              <el-button text type="primary" @click="$router.push('/tasks')">查看全部</el-button>
-            </div>
-          </template>
-          <el-table :data="recentTasks" size="small" stripe>
-            <el-table-column prop="title" label="任务" min-width="150" show-overflow-tooltip />
-            <el-table-column prop="project" label="项目" width="90" />
-            <el-table-column label="状态" width="90">
-              <template #default="{ row }">
-                <StatusTag type="task" :status="row.status" />
-              </template>
-            </el-table-column>
-            <el-table-column prop="dueDate" label="截止" width="100" />
-          </el-table>
-        </el-card>
-      </el-col>
-    </el-row>
+          <ul v-if="summary.release_risks.length" class="queue-list">
+            <li
+              v-for="item in summary.release_risks"
+              :key="`${item.type}-${item.id}`"
+              class="queue-item"
+            >
+              <div class="queue-copy">
+                <div class="queue-meta">
+                  <el-tag :type="severityType(item.severity)" size="small">
+                    {{ severityLabels[item.severity] ?? item.severity }}
+                  </el-tag>
+                  <span>{{ item.project }}</span>
+                </div>
+                <strong>{{ item.title }}</strong>
+                <span v-if="item.due_at" class="queue-date">
+                  <el-icon><Calendar /></el-icon>
+                  {{ formatDate(item.due_at) }}
+                </span>
+              </div>
+              <el-button
+                :data-testid="`queue-link-${item.type}-${item.id}`"
+                class="queue-link"
+                text
+                circle
+                :aria-label="`打开${item.title}`"
+                @click="navigate(item.target_url)"
+              >
+                <el-icon><ArrowRight /></el-icon>
+              </el-button>
+            </li>
+          </ul>
+          <el-empty v-else description="暂无发布风险" :image-size="72" />
+        </section>
+      </div>
+    </AsyncState>
   </div>
 </template>
 
 <style scoped lang="scss">
-.welcome-section {
-  margin-bottom: 24px;
+.dashboard-page {
+  min-width: 0;
 }
 
-.stats-row {
-  margin-bottom: 16px;
+.page-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+
+  h1 {
+    margin: 0;
+    color: $color-ink;
+    font-size: $font-size-h1;
+    line-height: 32px;
+  }
+
+  p {
+    margin: 3px 0 0;
+    color: $color-muted;
+    font-size: $font-size-small;
+    line-height: 20px;
+  }
 }
 
-.stat-card {
-  .stat-card-content {
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.metric-tile {
+  display: flex;
+  min-width: 0;
+  min-height: 82px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12px 15px;
+  border: 1px solid $color-border;
+  border-radius: 6px;
+  background: #fff;
+  color: $color-ink;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: border-color 0.2s, background-color 0.2s;
+
+  &:hover,
+  &:focus-visible {
+    border-color: $color-primary;
+    background: $color-primary-soft;
+    outline: none;
+  }
+}
+
+.metric-value {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 30px;
+}
+
+.metric-label {
+  margin-top: 5px;
+  color: $color-muted;
+  font-size: $font-size-small;
+  line-height: 18px;
+}
+
+.work-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+}
+
+.work-band {
+  min-width: 0;
+  border-top: 2px solid $color-primary;
+  background: #fff;
+
+  &--risk {
+    border-top-color: $color-warning;
+  }
+
+  :deep(.el-empty) {
+    min-height: 230px;
+    padding: 32px 16px;
+  }
+}
+
+.band-heading {
+  min-height: 54px;
+  padding: 13px 4px 11px;
+  border-bottom: 1px solid $color-border;
+
+  > div {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     justify-content: space-between;
+    gap: 12px;
   }
 
-  .stat-card-info {
-    .stat-card-value {
-      font-size: 28px;
-      font-weight: 700;
-      color: $gray-900;
-      line-height: 1.2;
-    }
-
-    .stat-card-title {
-      font-size: $font-size-small;
-      color: $gray-500;
-      margin-top: 4px;
-    }
-  }
-
-  .stat-card-icon {
-    width: 56px;
-    height: 56px;
-    border-radius: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-}
-
-.tables-row {
-  .card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+  h2 {
+    margin: 0;
+    color: $color-ink;
     font-size: $font-size-h3;
-    font-weight: 500;
+    line-height: 24px;
+  }
+
+  span {
+    color: $color-muted;
+    font-size: $font-size-caption;
+  }
+}
+
+.queue-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.queue-item {
+  display: flex;
+  min-height: 82px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 4px;
+  border-bottom: 1px solid $color-border;
+
+  &:last-child {
+    border-bottom: 0;
+  }
+}
+
+.queue-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 5px;
+
+  strong {
+    overflow: hidden;
+    color: $color-ink;
+    font-size: $font-size-body;
+    font-weight: 600;
+    line-height: 20px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.queue-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: $color-muted;
+  font-size: $font-size-caption;
+
+  span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.queue-date {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: $color-muted;
+  font-size: $font-size-caption;
+  line-height: 18px;
+}
+
+.queue-link {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  color: $color-primary;
+
+  &:hover {
+    background: $color-primary-soft;
+  }
+}
+
+@media (max-width: 1180px) {
+  .work-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .queue-copy strong {
+    white-space: normal;
   }
 }
 </style>

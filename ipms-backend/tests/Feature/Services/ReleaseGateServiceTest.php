@@ -435,6 +435,115 @@ class ReleaseGateServiceTest extends TestCase
         }
     }
 
+    public function test_batch_checks_match_individual_release_gate_results(): void
+    {
+        $blocked = ProjectVersion::factory()->inTesting()->create([
+            'release_notes' => null,
+        ]);
+        $passing = ProjectVersion::factory()
+            ->ready()
+            ->withPassingScope()
+            ->create();
+        $versions = collect([$blocked, $passing]);
+        $targetResolver = static fn (ProjectVersion $version): ProjectVersionStatus => (
+            $version->status === ProjectVersionStatus::IN_TESTING
+                ? ProjectVersionStatus::READY_TO_RELEASE
+                : ProjectVersionStatus::RELEASED
+        );
+
+        $batch = $this->service()->checkMany($versions, $targetResolver);
+
+        foreach ($versions as $version) {
+            $individual = $this->service()->check(
+                $version,
+                $targetResolver($version),
+            );
+            $this->assertSame(
+                $individual->jsonSerialize(),
+                $batch->get($version->id)->jsonSerialize(),
+            );
+        }
+    }
+
+    public function test_batch_checks_isolate_cross_project_and_unplanned_work_items(): void
+    {
+        $projectA = Project::factory()->create();
+        $projectB = Project::factory()->create();
+        $versionA = ProjectVersion::factory()->for($projectA)->create([
+            'release_notes' => 'Project A release notes',
+        ]);
+        $versionB = ProjectVersion::factory()->for($projectB)->create([
+            'release_notes' => 'Project B release notes',
+        ]);
+        $requirementA = Requirement::factory()->create();
+        $requirementB = Requirement::factory()->create();
+
+        RequirementProject::factory()
+            ->for($requirementA)
+            ->forVersion($versionA)
+            ->create([
+                'delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY->value,
+            ]);
+        RequirementProject::factory()
+            ->for($requirementB)
+            ->forVersion($versionB)
+            ->create([
+                'delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY->value,
+            ]);
+        RequirementProject::factory()
+            ->for($requirementB)
+            ->for($projectA)
+            ->create([
+                'delivery_status' => ProjectDeliveryStatus::PENDING_DEPLOY->value,
+            ]);
+
+        $unplannedTask = Task::factory()->create([
+            'requirement_id' => $requirementB->id,
+            'project_id' => $projectA->id,
+            'status' => TaskStatus::TODO->value,
+        ]);
+        $unplannedDefect = Defect::factory()->create([
+            'requirement_id' => $requirementB->id,
+            'project_id' => $projectA->id,
+            'severity' => DefectSeverity::SERIOUS->value,
+            'status' => DefectStatus::FIXING->value,
+        ]);
+        $scopedTask = Task::factory()->create([
+            'requirement_id' => $requirementB->id,
+            'project_id' => $projectB->id,
+            'status' => TaskStatus::TODO->value,
+        ]);
+        $scopedDefect = Defect::factory()->create([
+            'requirement_id' => $requirementB->id,
+            'project_id' => $projectB->id,
+            'severity' => DefectSeverity::SERIOUS->value,
+            'status' => DefectStatus::FIXING->value,
+        ]);
+        $retrievedTaskIds = [];
+        $retrievedDefectIds = [];
+        Task::retrieved(function (Task $task) use (&$retrievedTaskIds): void {
+            $retrievedTaskIds[] = $task->id;
+        });
+        Defect::retrieved(function (Defect $defect) use (&$retrievedDefectIds): void {
+            $retrievedDefectIds[] = $defect->id;
+        });
+
+        $results = $this->service()->checkMany(
+            collect([$versionA, $versionB]),
+            static fn (): ProjectVersionStatus => ProjectVersionStatus::READY_TO_RELEASE,
+        );
+
+        $this->assertTrue($results->get($versionA->id)->passed);
+        $this->assertSame(
+            ['tasks_completed', 'severe_defects_closed'],
+            array_column($results->get($versionB->id)->blocking, 'code'),
+        );
+        $this->assertNotSame($unplannedTask->id, $scopedTask->id);
+        $this->assertNotSame($unplannedDefect->id, $scopedDefect->id);
+        $this->assertSame([$scopedTask->id], $retrievedTaskIds);
+        $this->assertSame([$scopedDefect->id], $retrievedDefectIds);
+    }
+
     protected function tearDown(): void
     {
         try {

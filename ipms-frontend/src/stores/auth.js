@@ -3,6 +3,16 @@ import { ref, computed } from 'vue'
 import { login as apiLogin, logout as apiLogout, fetchUser as apiFetchUser } from '@/api/auth'
 import router from '@/router'
 
+const ROLE_PRIORITY = [
+  'super_admin',
+  'it_pm',
+  'it_member',
+  'supplier_pm',
+  'supplier_tester',
+  'supplier_dev',
+  'requester',
+]
+
 export const useAuthStore = defineStore('auth', () => {
   // ======= State =======
   const user = ref(null)
@@ -10,7 +20,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   // ======= Getters =======
   const roles = computed(() => user.value?.roles ?? [])
-  const currentRole = computed(() => roles.value.includes('super_admin') ? 'super_admin' : roles.value[0] ?? 'guest')
+  const currentRole = computed(() => ROLE_PRIORITY.find((role) => roles.value.includes(role)) ?? 'guest')
   const permissions = computed(() => user.value?.permissions ?? [])
   const userName = computed(() => user.value?.display_name || user.value?.username || '')
   const userType = computed(() => user.value?.user_type ?? null)

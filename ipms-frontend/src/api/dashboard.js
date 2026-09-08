@@ -5,6 +5,13 @@ import request from './index'
  */
 
 /**
+ * 获取当前用户角色范围内的工作台摘要
+ */
+export function getDashboardSummary() {
+  return request.get('/dashboard/summary')
+}
+
+/**
  * 获取仪表盘统计数据
  */
 export function getDashboardStats() {

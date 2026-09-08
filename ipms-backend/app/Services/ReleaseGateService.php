@@ -13,6 +13,7 @@ use App\Models\ProjectVersion;
 use App\Models\RequirementProject;
 use App\Models\Task;
 use App\ValueObjects\ReleaseGateResult;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Collection;
 
 final class ReleaseGateService
@@ -34,13 +35,131 @@ final class ReleaseGateService
             ->orderBy('id')
             ->get();
 
+        return $this->evaluate($version, $target, $links);
+    }
+
+    /**
+     * Evaluate many versions with a bounded set of database queries.
+     *
+     * @param  Collection<int, ProjectVersion>  $versions
+     * @param  callable(ProjectVersion): ProjectVersionStatus  $targetResolver
+     * @return Collection<int, ReleaseGateResult>
+     */
+    public function checkMany(
+        Collection $versions,
+        callable $targetResolver,
+    ): Collection {
+        $versionIds = $versions
+            ->pluck('id')
+            ->map(static fn ($id): int => (int) $id)
+            ->unique()
+            ->values();
+
+        if ($versionIds->isEmpty()) {
+            return collect();
+        }
+
+        $freshVersions = ProjectVersion::query()
+            ->whereKey($versionIds)
+            ->get()
+            ->keyBy(static fn (ProjectVersion $version): int => (int) $version->id);
+        $links = RequirementProject::query()
+            ->with('requirement:id,status,dev_lead_id')
+            ->whereIn('project_version_id', $versionIds)
+            ->orderBy('id')
+            ->get()
+            ->groupBy(static fn (RequirementProject $link): int => (int) $link->project_version_id);
+        $allLinks = $links->flatten(1);
+        $tasksByScope = $allLinks->isEmpty()
+            ? collect()
+            : Task::query()
+                ->whereExists(function (QueryBuilder $scopeQuery) use ($versionIds): void {
+                    $scopeQuery
+                        ->selectRaw('1')
+                        ->from('requirement_project as gate_scopes')
+                        ->whereColumn('gate_scopes.project_id', 'tasks.project_id')
+                        ->whereColumn('gate_scopes.requirement_id', 'tasks.requirement_id')
+                        ->whereIn('gate_scopes.project_version_id', $versionIds);
+                })
+                ->orderBy('tasks.id')
+                ->get()
+                ->groupBy(
+                    static fn (Task $task): string => "{$task->project_id}:{$task->requirement_id}",
+                );
+        $defectsByScope = $allLinks->isEmpty()
+            ? collect()
+            : Defect::query()
+                ->whereExists(function (QueryBuilder $scopeQuery) use ($versionIds): void {
+                    $scopeQuery
+                        ->selectRaw('1')
+                        ->from('requirement_project as gate_scopes')
+                        ->whereColumn('gate_scopes.project_id', 'defects.project_id')
+                        ->whereColumn('gate_scopes.requirement_id', 'defects.requirement_id')
+                        ->whereIn('gate_scopes.project_version_id', $versionIds);
+                })
+                ->orderBy('defects.id')
+                ->get()
+                ->groupBy(
+                    static fn (Defect $defect): string => "{$defect->project_id}:{$defect->requirement_id}",
+                );
+
+        return $freshVersions->mapWithKeys(function (ProjectVersion $version) use (
+            $targetResolver,
+            $links,
+            $tasksByScope,
+            $defectsByScope,
+        ): array {
+            $versionLinks = $links
+                ->get($version->id, collect())
+                ->where('project_id', $version->project_id)
+                ->values();
+            $scopeKeys = $versionLinks
+                ->map(
+                    static fn (RequirementProject $link): string => "{$link->project_id}:{$link->requirement_id}",
+                )
+                ->unique();
+            $versionTasks = $scopeKeys
+                ->flatMap(
+                    static fn (string $key): Collection => $tasksByScope->get($key, collect()),
+                )
+                ->values();
+            $versionDefects = $scopeKeys
+                ->flatMap(
+                    static fn (string $key): Collection => $defectsByScope->get($key, collect()),
+                )
+                ->values();
+
+            return [
+                (int) $version->id => $this->evaluate(
+                    $version,
+                    $targetResolver($version),
+                    $versionLinks,
+                    $versionTasks,
+                    $versionDefects,
+                ),
+            ];
+        });
+    }
+
+    /**
+     * @param  Collection<int, RequirementProject>  $links
+     * @param  Collection<int, Task>|null  $tasks
+     * @param  Collection<int, Defect>|null  $defects
+     */
+    private function evaluate(
+        ProjectVersion $version,
+        ProjectVersionStatus $target,
+        Collection $links,
+        ?Collection $tasks = null,
+        ?Collection $defects = null,
+    ): ReleaseGateResult {
         return new ReleaseGateResult([
             $this->metadataCheck($version, $target),
             $this->scopeCheck($links, $target),
             $this->reviewedAssignedCheck($links, $target),
             $this->deliveryCheck($links, $target),
-            $this->tasksCheck($version, $links, $target),
-            $this->defectsCheck($version, $links, $target),
+            $this->tasksCheck($version, $links, $target, $tasks),
+            $this->defectsCheck($version, $links, $target, $defects),
             $this->notesCheck($version, $target),
             $this->acceptanceCheck($links, $target),
         ]);
@@ -184,10 +303,11 @@ final class ReleaseGateService
         ProjectVersion $version,
         Collection $links,
         ProjectVersionStatus $target,
+        ?Collection $scopedTasks = null,
     ): array {
         $applicable = in_array($target, self::READY_TARGETS, true);
         $tasks = $applicable
-            ? $this->scopeTasks($version, $links)
+            ? ($scopedTasks ?? $this->scopeTasks($version, $links))
             : collect();
         $incomplete = $tasks->filter(
             fn (Task $task): bool => $task->status !== TaskStatus::COMPLETED->value,
@@ -219,13 +339,14 @@ final class ReleaseGateService
         ProjectVersion $version,
         Collection $links,
         ProjectVersionStatus $target,
+        ?Collection $scopedDefects = null,
     ): array {
         $ready = in_array($target, self::READY_TARGETS, true);
         $archive = $target === ProjectVersionStatus::ARCHIVED;
         $applicable = $ready || $archive;
         $mode = $archive ? 'all' : 'severe';
         $defects = $applicable
-            ? $this->scopeDefects($version, $links)
+            ? ($scopedDefects ?? $this->scopeDefects($version, $links))
             : collect();
         $relevant = $archive
             ? $defects

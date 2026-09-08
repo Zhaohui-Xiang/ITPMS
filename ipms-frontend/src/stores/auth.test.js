@@ -98,6 +98,21 @@ describe('auth store', () => {
     expect(store.isUserType('internal')).toBe(true)
   })
 
+  it.each([
+    [['requester', 'supplier_dev', 'supplier_tester', 'supplier_pm', 'it_member', 'it_pm', 'super_admin'], 'super_admin'],
+    [['requester', 'supplier_dev', 'supplier_tester', 'supplier_pm', 'it_member', 'it_pm'], 'it_pm'],
+    [['requester', 'supplier_dev', 'supplier_tester', 'supplier_pm', 'it_member'], 'it_member'],
+    [['requester', 'supplier_dev', 'supplier_tester', 'supplier_pm'], 'supplier_pm'],
+    [['requester', 'supplier_dev', 'supplier_tester'], 'supplier_tester'],
+    [['requester', 'supplier_dev'], 'supplier_dev'],
+    [['requester'], 'requester'],
+  ])('selects %s as the current role regardless of role array order', (roles, expectedRole) => {
+    const store = useAuthStore()
+    store.user = makeUser({ roles })
+
+    expect(store.currentRole).toBe(expectedRole)
+  })
+
   it('updates the session from fetchUser and clears it when fetching fails', async () => {
     const store = useAuthStore()
     const response = { data: { data: { user: makeUser({ display_name: '李四' }) } } }
