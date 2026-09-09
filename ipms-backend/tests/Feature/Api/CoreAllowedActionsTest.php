@@ -11,6 +11,7 @@ use App\Models\Organization;
 use App\Models\Permission;
 use App\Models\Project;
 use App\Models\Requirement;
+use App\Models\RequirementAttachment;
 use App\Models\RequirementProject;
 use App\Models\Task;
 use App\Models\User;
@@ -430,6 +431,74 @@ class CoreAllowedActionsTest extends TestCase
             ->assertOk()
             ->assertJsonCount(2, 'data.projects')
             ->assertJsonCount(2, 'data.project_deliveries');
+    }
+
+    public function test_requirement_attachment_metadata_comes_from_database(): void
+    {
+        $fixture = $this->fixture();
+        RequirementAttachment::query()->create([
+            'requirement_id' => $fixture['requirement']->id,
+            'file' => 'requirements/private/specification.pdf',
+            'filename' => 'specification.pdf',
+            'file_size' => 2048,
+            'file_type' => 'application/pdf',
+            'uploaded_by_id' => $fixture['requester']->id,
+            'uploaded_at' => now(),
+        ]);
+
+        $this->actingAs($fixture['it_pm'])
+            ->getJson("/api/requirements/{$fixture['requirement']->id}")
+            ->assertOk()
+            ->assertJsonPath('data.attachments.0.filename', 'specification.pdf')
+            ->assertJsonPath('data.attachments.0.file_size', 2048)
+            ->assertJsonPath(
+                'data.attachments.0.uploaded_by.display_name',
+                $fixture['requester']->display_name,
+            )
+            ->assertJsonMissingPath('data.attachments.0.file');
+    }
+
+    public function test_project_delivery_actions_are_scoped_per_project(): void
+    {
+        $fixture = $this->fixture();
+        $otherManager = User::factory()->withRole('it_pm')->create();
+        $otherProject = Project::factory()->create([
+            'name' => 'Other managed project',
+            'manager_id' => $otherManager->id,
+        ]);
+        RequirementProject::factory()
+            ->for($fixture['requirement'])
+            ->for($otherProject)
+            ->create(['delivery_status' => ProjectDeliveryStatus::ASSIGNED]);
+
+        $response = $this->actingAs($fixture['it_pm'])
+            ->getJson("/api/requirements/{$fixture['requirement']->id}")
+            ->assertOk();
+        $deliveries = collect($response->json('data.project_deliveries'))
+            ->keyBy('project.id');
+
+        $this->assertTrue($deliveries[$fixture['project']->id]['can_view_project']);
+        $this->assertSame(
+            ['transition'],
+            $deliveries[$fixture['project']->id]['allowed_actions'],
+        );
+        $this->assertFalse($deliveries[$otherProject->id]['can_view_project']);
+        $this->assertSame([], $deliveries[$otherProject->id]['allowed_actions']);
+
+        $requesterResponse = $this->actingAs($fixture['requester'])
+            ->getJson("/api/requirements/{$fixture['requirement']->id}")
+            ->assertOk();
+        $requesterDeliveries = collect(
+            $requesterResponse->json('data.project_deliveries'),
+        )->keyBy('project.id');
+
+        $this->assertTrue(
+            $requesterDeliveries[$otherProject->id]['can_view_project'],
+        );
+        $this->assertSame(
+            [],
+            $requesterDeliveries[$otherProject->id]['allowed_actions'],
+        );
     }
 
     public function test_defect_creation_requires_an_explicit_linked_project(): void

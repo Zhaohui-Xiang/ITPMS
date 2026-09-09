@@ -270,6 +270,10 @@ final class RequirementController extends Controller
             'submitter:id,display_name',
             'reviewer:id,display_name',
             'devLead:id,display_name',
+            'attachments' => static fn ($query) => $query
+                ->with('uploader:id,display_name')
+                ->orderByDesc('uploaded_at')
+                ->orderByDesc('id'),
             'projects' => function ($projectQuery) use ($actor, $scopedProjectId): void {
                 $projectQuery->select([
                     'projects.id',
