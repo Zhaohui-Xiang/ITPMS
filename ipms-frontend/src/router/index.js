@@ -36,11 +36,7 @@ const routes = [
       {
         path: 'projects/:projectId/versions',
         name: 'ProjectVersions',
-        redirect: (to) => ({
-          name: 'ProjectDetail',
-          params: { id: to.params.projectId },
-          query: { tab: 'versions' },
-        }),
+        component: () => import('@/views/projects/ProjectVersionsView.vue'),
         meta: { title: '发布版本' },
       },
       {

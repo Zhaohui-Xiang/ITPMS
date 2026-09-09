@@ -32,11 +32,11 @@ describe('operations shell routes', () => {
     expect(paths).not.toContain('profile')
   })
 
-  it('reserves project versions as a project child path without a top-level menu page', () => {
+  it('serves project versions as a project child page without a top-level menu item', () => {
     const shell = router.options.routes.find((route) => route.name === 'OperationsShell')
     const versions = shell.children.find((route) => route.name === 'ProjectVersions')
 
     expect(versions.path).toBe('projects/:projectId/versions')
-    expect(typeof versions.redirect).toBe('function')
+    expect(typeof versions.component).toBe('function')
   })
 })
