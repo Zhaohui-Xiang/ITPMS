@@ -39,4 +39,13 @@ describe('operations shell routes', () => {
     expect(versions.path).toBe('projects/:projectId/versions')
     expect(typeof versions.component).toBe('function')
   })
+
+  it('serves the project version release workspace inside the operations shell', () => {
+    const shell = router.options.routes.find((route) => route.name === 'OperationsShell')
+    const detail = shell.children.find((route) => route.name === 'ProjectVersionDetail')
+
+    expect(detail.path).toBe('project-versions/:id')
+    expect(typeof detail.component).toBe('function')
+    expect(detail.meta.title).toBe('版本详情')
+  })
 })

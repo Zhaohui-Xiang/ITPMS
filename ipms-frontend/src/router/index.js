@@ -40,6 +40,12 @@ const routes = [
         meta: { title: '发布版本' },
       },
       {
+        path: 'project-versions/:id',
+        name: 'ProjectVersionDetail',
+        component: () => import('@/views/releases/ProjectVersionDetail.vue'),
+        meta: { title: '版本详情' },
+      },
+      {
         path: 'requirements',
         name: 'RequirementList',
         component: () => import('@/views/requirements/RequirementList.vue'),
