@@ -14,7 +14,7 @@ function mountState(props = {}) {
     global: {
       stubs: {
         ElButton,
-        ElEmpty: { template: '<div><slot /></div>' },
+        ElEmpty: { template: '<div><slot name="description" /><slot /></div>' },
         ElIcon: { template: '<i><slot /></i>' },
         ElSkeleton: { template: '<div class="skeleton" />' },
         WarningFilled: true,

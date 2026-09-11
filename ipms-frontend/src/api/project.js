@@ -9,6 +9,10 @@ import request from './index'
  * 获取项目列表
  * @param {Object} params - { page, pageSize, keyword, status, type }
  */
+export function listRequirementProjectOptions(params) {
+  return request.get('/requirements/project-options', { params })
+}
+
 export function listProjects(params) {
   return request.get('/projects', { params })
 }

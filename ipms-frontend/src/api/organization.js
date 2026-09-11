@@ -9,7 +9,7 @@ import request from './index'
  * @param {Object} params - { type: 'internal_it'|'supplier'|'system_user' }
  */
 export function getOrgTree(params) {
-  return request.get('/organizations/tree', { params })
+  return request.get('/organizations', { params })
 }
 
 /**

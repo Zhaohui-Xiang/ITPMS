@@ -57,6 +57,9 @@ final class TaskResource extends JsonResource
         if (Gate::forUser($user)->allows('update', $this->resource)) {
             $actions[] = 'edit';
         }
+        if (Gate::forUser($user)->allows('assign', $this->resource)) {
+            $actions[] = 'assign';
+        }
         if ($status === TaskStatus::TODO
             && $this->assignee_id === null
             && Gate::forUser($user)->allows('claim', $this->resource)) {

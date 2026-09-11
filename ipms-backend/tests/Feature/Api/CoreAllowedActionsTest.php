@@ -98,16 +98,30 @@ class CoreAllowedActionsTest extends TestCase
             ->assertJsonPath('error_code', 'FORBIDDEN');
     }
 
+    public function test_requirement_project_editability_is_limited_to_pending_submitter(): void
+    {
+        $fixture = $this->fixture();
+        $url = "/api/requirements/{$fixture['requirement']->id}";
+
+        $this->actingAs($fixture['requester'])->getJson($url)
+            ->assertOk()->assertJsonPath('data.can_edit_project_scope', false);
+        $fixture['requirement']->update(['status' => RequirementStatus::PENDING_REVIEW->value]);
+        $this->actingAs($fixture['requester'])->getJson($url)
+            ->assertOk()->assertJsonPath('data.can_edit_project_scope', true);
+        $this->actingAs($fixture['it_pm'])->getJson($url)
+            ->assertOk()->assertJsonPath('data.can_edit_project_scope', false);
+    }
+
     public function test_task_actions_are_role_state_and_assignee_scoped(): void
     {
         $fixture = $this->fixture();
         $expected = [
-            'it_pm' => ['edit', 'transition', 'hold'],
+            'it_pm' => ['edit', 'assign', 'transition', 'hold'],
             'it_member' => ['edit'],
-            'supplier_pm' => ['edit', 'transition', 'hold'],
+            'supplier_pm' => ['edit', 'assign', 'transition', 'hold'],
             'supplier_dev' => ['claim'],
             'supplier_tester' => [],
-            'superadmin' => ['edit', 'claim', 'transition', 'hold'],
+            'superadmin' => ['edit', 'assign', 'claim', 'transition', 'hold'],
         ];
 
         foreach ($expected as $actor => $actions) {
@@ -479,7 +493,7 @@ class CoreAllowedActionsTest extends TestCase
 
         $this->assertTrue($deliveries[$fixture['project']->id]['can_view_project']);
         $this->assertSame(
-            ['transition'],
+            ['transition', 'create_task'],
             $deliveries[$fixture['project']->id]['allowed_actions'],
         );
         $this->assertFalse($deliveries[$otherProject->id]['can_view_project']);

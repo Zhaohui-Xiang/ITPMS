@@ -63,6 +63,10 @@ final class RequirementResource extends JsonResource
                 'uploaded_at' => $attachment->uploaded_at?->toISOString(),
             ])->values()->all(),
             'allowed_actions' => $this->allowedActions($request),
+            'can_edit_project_scope' => $request->user() !== null
+                && $this->status === RequirementStatus::PENDING_REVIEW->value
+                && $this->submitter_id === $request->user()->id
+                && Gate::forUser($request->user())->allows('update', $this->resource),
             'created_at' => $this->created_at?->toISOString(),
             'updated_at' => $this->updated_at?->toISOString(),
         ];
@@ -89,6 +93,16 @@ final class RequirementResource extends JsonResource
                 [$this->resource, $project],
             );
 
+        $actions = $canTransition ? ['transition'] : [];
+        if ($user !== null
+            && $project !== null
+            && Gate::forUser($user)->allows(
+                'createTask',
+                [$this->resource, $project],
+            )) {
+            $actions[] = 'create_task';
+        }
+
         return [
             'project' => $project === null ? null : [
                 'id' => $project->id,
@@ -96,7 +110,7 @@ final class RequirementResource extends JsonResource
                 'system_type' => $project->system_type,
             ],
             'can_view_project' => $canViewProject,
-            'allowed_actions' => $canTransition ? ['transition'] : [],
+            'allowed_actions' => $actions,
             'delivery_status' => $deliveryStatus?->value,
             'delivery_status_code' => $deliveryStatus?->name,
             'delivery_status_label' => $deliveryStatus?->label(),

@@ -10,6 +10,7 @@ use App\Models\Project;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 
 class DocumentController extends Controller
 {
@@ -29,7 +30,7 @@ class DocumentController extends Controller
         // 获取文件夹树
         $folders = Folder::where('project_id', $projectId)
             ->whereNull('parent_id')
-            ->with(['children.children', 'documents' => function ($q) {
+            ->with(['children.documents.uploader:id,display_name', 'children.children.documents.uploader:id,display_name', 'children.children.children.documents.uploader:id,display_name', 'documents' => function ($q) {
                 $q->with('uploader:id,display_name')->orderBy('created_at', 'desc');
             }])
             ->orderBy('name')
@@ -67,7 +68,7 @@ class DocumentController extends Controller
 
         $request->validate([
             'file' => ['required', 'file', 'max:20480'], // 最大 20MB
-            'folder_id' => ['nullable', 'integer', 'exists:folders,id'],
+            'folder_id' => ['nullable', 'integer', Rule::exists('folders', 'id')->where('project_id', $projectId)],
         ]);
 
         $file = $request->file('file');

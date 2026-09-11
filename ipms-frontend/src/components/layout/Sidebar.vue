@@ -172,4 +172,8 @@ function handleSelect(index) {
 .fade-leave-to {
   opacity: 0;
 }
+@media (max-width: 767px) {
+  .sidebar { transition: transform 0.2s ease; }
+  .sidebar.collapsed { transform: translateX(-100%); }
+}
 </style>

@@ -246,4 +246,8 @@ onBeforeUnmount(() => clearTimeout(debounceTimer))
     text-align: center;
   }
 }
+@media (max-width: 767px) {
+  .global-search { width: 100%; min-width: 0; }
+  .global-search__results { position: fixed; top: 58px; left: 12px; right: 12px; }
+}
 </style>

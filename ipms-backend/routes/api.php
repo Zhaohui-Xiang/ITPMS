@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\DocumentController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\OrganizationController;
 use App\Http\Controllers\Api\ProjectController;
+use App\Http\Controllers\Api\ProjectWorkOptionsController;
 use App\Http\Controllers\Api\ProjectVersionController;
 use App\Http\Controllers\Api\RequirementController;
 use App\Http\Controllers\Api\TaskController;
@@ -52,6 +53,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/', [ProjectController::class, 'store']);
         Route::get('/{projectId}/versions', [ProjectVersionController::class, 'index'])->whereNumber('projectId');
         Route::post('/{projectId}/versions', [ProjectVersionController::class, 'store'])->whereNumber('projectId');
+        Route::get('/{id}/assignee-options', [ProjectWorkOptionsController::class, 'index'])->whereNumber('id');
         Route::get('/{id}', [ProjectController::class, 'show'])->whereNumber('id');
         Route::put('/{id}', [ProjectController::class, 'update'])->whereNumber('id');
         Route::delete('/{id}', [ProjectController::class, 'destroy'])->whereNumber('id');
@@ -84,6 +86,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Requirements
     // ========================================================================
     Route::prefix('requirements')->group(function () {
+        Route::get('/project-options', [RequirementController::class, 'projectOptions']);
         Route::get('/', [RequirementController::class, 'index']);
         Route::post('/', [RequirementController::class, 'store']);
         Route::put('/{requirementId}/projects/{projectId}/version', [ProjectVersionController::class, 'assignRequirement'])->whereNumber(['requirementId', 'projectId']);
@@ -154,6 +157,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/{id}', [OrganizationController::class, 'update']);
         Route::delete('/{id}', [OrganizationController::class, 'destroy']);
         Route::post('/{id}/users', [OrganizationController::class, 'addUsers']);
+        Route::delete('/{id}/users/{userId}', [OrganizationController::class, 'removeUser'])->whereNumber(['id', 'userId']);
     });
 
     // ========================================================================

@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useSidebarStore } from '@/stores/sidebar'
 import GlobalSearch from './GlobalSearch.vue'
+import BrandMark from './BrandMark.vue'
 import ProfileDialog from '@/components/common/ProfileDialog.vue'
 
 const authStore = useAuthStore()
@@ -44,17 +45,16 @@ function handleDialogVisibility(value) {
           </el-icon>
         </el-button>
       </el-tooltip>
+      <BrandMark compact class="mobile-brand" />
       <GlobalSearch />
     </div>
 
     <div class="header-right">
-      <el-badge :value="0" :show-zero="true" :max="99" class="notification-badge">
-        <el-tooltip content="站内通知">
-          <el-button text class="header-icon-btn" aria-label="站内通知">
-            <el-icon :size="20"><Bell /></el-icon>
-          </el-button>
-        </el-tooltip>
-      </el-badge>
+      <el-tooltip content="站内通知尚未上线">
+        <el-button text disabled class="header-icon-btn" aria-label="站内通知尚未上线">
+          <el-icon :size="20"><Bell /></el-icon>
+        </el-button>
+      </el-tooltip>
 
       <el-dropdown trigger="click" @command="handleCommand">
         <div class="user-info">
@@ -188,5 +188,14 @@ function handleDialogVisibility(value) {
     font-size: $font-size-caption;
     color: $gray-500;
   }
+}
+.mobile-brand { display: none; }
+@media (max-width: 767px) {
+  .header-bar { padding: 0 8px; gap: 8px; }
+  .header-left { min-width: 0; flex: 1; gap: 4px; }
+  .header-right { flex: 0 0 auto; }
+  .user-info { padding: 4px; }
+  .user-info .user-copy, .user-info .dropdown-icon { display: none; }
+  .mobile-brand { display: flex; flex: 0 0 24px; }
 }
 </style>

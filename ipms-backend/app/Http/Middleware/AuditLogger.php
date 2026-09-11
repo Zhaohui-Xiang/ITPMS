@@ -48,8 +48,14 @@ class AuditLogger
             'user_name' => $data['user_name'] ?? '',
             'user_display_name' => $data['user_display_name'] ?? '',
             'user_type' => $data['user_type'] ?? 1,
-            'module' => $data['module'],
-            'action_type' => $data['action_type'],
+            'module' => is_int($data['module']) ? $data['module'] : [
+                'project' => 1, 'requirement' => 2, 'task' => 3, 'defect' => 4,
+                'document' => 5, 'api_document' => 5, 'user' => 6, 'organization' => 7,
+            ][$data['module']],
+            'action_type' => is_int($data['action_type']) ? $data['action_type'] : [
+                'create' => 1, 'create_folder' => 1, 'update' => 2, 'delete' => 3,
+                'disable' => 4, 'add_users' => 6, 'upload' => 7, 'download' => 8, 'export' => 9,
+            ][$data['action_type']],
             'target_type' => $data['target_type'],
             'target_id' => (string) ($data['target_id'] ?? ''),
             'target_name' => $data['target_name'] ?? null,

@@ -36,6 +36,18 @@ final class RequirementController extends Controller
         private readonly TaskWorkflowService $taskWorkflow,
     ) {}
 
+    public function projectOptions(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        abort_unless($user->hasPermission('requirement.create'), 403);
+        $query = Project::query()->select(['id', 'name'])->where('status', '<>', 3);
+        if ($user->user_type !== UserType::SYSTEM_USER->value) {
+            ProjectScope::apply($query, $user);
+        }
+        $pageSize = min(max($request->integer('page_size', 20), 1), 100);
+        return ApiResponse::paginated($query->orderBy('name')->orderBy('id')->paginate($pageSize));
+    }
+
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();

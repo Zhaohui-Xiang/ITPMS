@@ -2,7 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Enums\UserType;
+
 use App\Http\Controllers\Controller;
 use App\Http\Middleware\AuditLogger;
 use App\Http\Requests\UpdateUserRequest;
@@ -28,13 +28,7 @@ class UserController extends Controller
             // 超管查看所有用户
             $query = User::with('roles:id,name,code')
                 ->with('organizations:id,name,org_type');
-        } elseif ($user->user_type === UserType::SUPPLIER->value && $user->hasPermission('user.view')) {
-            // 供应商项目经理查看本团队用户
-            $orgIds = $user->getSupplierDescendantOrgIds();
-            $query = User::with('roles:id,name,code')
-                ->whereHas('organizations', function ($q) use ($orgIds) {
-                    $q->whereIn('organizations.id', $orgIds);
-                });
+
         } else {
             return response()->json(['code' => 403, 'message' => '您无权查看用户列表'], 403);
         }
@@ -77,8 +71,7 @@ class UserController extends Controller
         $currentUser = $request->user();
 
         // 权限检查
-        $canCreate = $currentUser->isSuperAdmin()
-            || ($currentUser->user_type === UserType::SUPPLIER->value && $currentUser->hasPermission('user.create'));
+        $canCreate = $currentUser->isSuperAdmin();
 
         if (! $canCreate) {
             return response()->json(['code' => 403, 'message' => '您无权创建用户'], 403);
@@ -167,7 +160,7 @@ class UserController extends Controller
 
         // 权限检查
         if (! $currentUser->isSuperAdmin()
-            && ! ($currentUser->user_type === UserType::SUPPLIER->value && $currentUser->hasPermission('user.view'))
+
             && $currentUser->id !== $user->id
         ) {
             return response()->json(['code' => 403, 'message' => '您无权查看该用户'], 403);

@@ -74,14 +74,12 @@ describe('HeaderBar', () => {
     authStore.mustChangePassword = false
   })
 
-  it('shows global search and a real zero notification state', () => {
+  it('shows search without inventing an unread notification count', () => {
     const wrapper = shallowMount(HeaderBar, { global: { stubs } })
 
     expect(wrapper.findComponent(GlobalSearch).exists()).toBe(true)
-    expect(wrapper.findComponent(ElBadge).props()).toMatchObject({
-      value: 0,
-      showZero: true,
-    })
+    expect(wrapper.findComponent(ElBadge).exists()).toBe(false)
+    expect(wrapper.get('[aria-label="站内通知尚未上线"]').attributes('disabled')).toBeDefined()
   })
 
   it('opens ProfileDialog instead of navigating to an invalid profile route', async () => {

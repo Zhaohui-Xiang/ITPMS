@@ -49,9 +49,11 @@ const errorMessage = computed(() => {
   </div>
 
   <div v-else-if="empty" class="async-state async-state--empty" data-state="empty">
-    <el-empty description="">
-      <p class="async-state__title">{{ emptyTitle }}</p>
-      <p v-if="emptyDescription" class="async-state__description">{{ emptyDescription }}</p>
+    <el-empty :image-size="96">
+      <template #description>
+        <p class="async-state__title">{{ emptyTitle }}</p>
+        <p v-if="emptyDescription" class="async-state__description">{{ emptyDescription }}</p>
+      </template>
     </el-empty>
   </div>
 

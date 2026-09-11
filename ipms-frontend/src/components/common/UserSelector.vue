@@ -1,80 +1,40 @@
 <script setup>
-import { ref } from 'vue'
-
+import { onBeforeUnmount, ref, watch } from 'vue'
+import { listAssigneeOptions } from '@/api/workOptions'
+import { mapApiError } from '@/composables/useApiError'
 const props = defineProps({
-  modelValue: {
-    type: [String, Number],
-    default: null
-  },
-  placeholder: {
-    type: String,
-    default: '请选择人员'
-  }
+  modelValue: { type: [Number, String], default: null },
+  projectId: { type: [Number, String], default: null },
+  workType: { type: String, default: 'task' },
+  placeholder: { type: String, default: '选择负责人' },
 })
-
 const emit = defineEmits(['update:modelValue'])
-
-// Mock 用户数据
-const userOptions = ref([
-  { id: 1, name: '张三', role: '项目经理', org: '信息化部门 - 开发组' },
-  { id: 2, name: '李四', role: '开发人员', org: '信息化部门 - SAP组' },
-  { id: 3, name: '王五', role: '测试人员', org: '信息化部门 - SAP组' },
-  { id: 4, name: '赵六', role: '项目成员', org: '信息化部门 - 开发组' },
-  { id: 5, name: '孙七', role: '项目经理', org: '供应商A - 开发组' },
-  { id: 6, name: '周八', role: '开发人员', org: '供应商A - 开发组' }
-])
-
-function handleChange(val) {
-  emit('update:modelValue', val)
+const options = ref([]), loading = ref(false), error = ref(null)
+let sequence = 0
+async function fetchOptions() {
+  const current = ++sequence
+  options.value = []
+  error.value = null
+  if (!props.projectId) { loading.value = false; return }
+  loading.value = true
+  try {
+    const { data } = await listAssigneeOptions(props.projectId, props.workType)
+    if (current === sequence) options.value = data.data
+  } catch (failure) { if (current === sequence) error.value = mapApiError(failure) }
+  finally { if (current === sequence) loading.value = false }
 }
+watch(() => [props.projectId, props.workType], (_value, previous) => {
+  if (previous) emit('update:modelValue', null)
+  fetchOptions()
+}, { immediate: true })
+onBeforeUnmount(() => { sequence++ })
 </script>
-
 <template>
-  <el-select
-    :model-value="modelValue"
-    :placeholder="placeholder"
-    filterable
-    clearable
-    @update:model-value="handleChange"
-  >
-    <el-option
-      v-for="user in userOptions"
-      :key="user.id"
-      :label="`${user.name} (${user.role})`"
-      :value="user.id"
-    >
-      <div class="user-option">
-        <span class="user-option-name">{{ user.name }}</span>
-        <span class="user-option-role">{{ user.role }}</span>
-        <span class="user-option-org">{{ user.org }}</span>
-      </div>
-    </el-option>
-  </el-select>
+  <div class="user-selector">
+    <el-select :model-value="modelValue" :placeholder="placeholder" :disabled="!projectId || Boolean(error)" :loading="loading" filterable clearable no-data-text="暂无可分配人员" @update:model-value="$emit('update:modelValue', $event)">
+      <el-option v-for="user in options" :key="user.id" :label="user.display_name" :value="user.id" />
+    </el-select>
+    <span v-if="error" class="user-error">{{ error.message }} <el-button text @click="fetchOptions">重试</el-button></span>
+  </div>
 </template>
-
-<style scoped lang="scss">
-.user-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  line-height: 28px;
-
-  .user-option-name {
-    font-weight: 500;
-  }
-
-  .user-option-role {
-    font-size: $font-size-caption;
-    color: $color-primary;
-    background: #ecf5ff;
-    padding: 0 6px;
-    border-radius: 3px;
-  }
-
-  .user-option-org {
-    font-size: $font-size-caption;
-    color: $gray-500;
-    margin-left: auto;
-  }
-}
-</style>
+<style scoped>.user-selector,.user-selector .el-select{width:100%;min-width:0}.user-error{color:#b42318;font-size:13px}</style>
