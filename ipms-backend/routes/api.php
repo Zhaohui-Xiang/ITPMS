@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\DefectController;
 use App\Http\Controllers\Api\DocumentController;
 use App\Http\Controllers\Api\NotificationController;
+use App\Http\Controllers\Api\InAppNotificationController;
 use App\Http\Controllers\Api\OrganizationController;
 use App\Http\Controllers\Api\ProjectController;
 use App\Http\Controllers\Api\ProjectWorkOptionsController;
@@ -190,6 +191,13 @@ Route::middleware('auth:sanctum')->group(function () {
     // ========================================================================
     // Notifications
     // ========================================================================
+    Route::prefix('notifications')->group(function () {
+        Route::get('/', [InAppNotificationController::class, 'index']);
+        Route::get('/unread-count', [InAppNotificationController::class, 'unreadCount']);
+        Route::post('/read-all', [InAppNotificationController::class, 'readAll']);
+        Route::post('/{id}/read', [InAppNotificationController::class, 'read'])->whereNumber('id');
+    });
+
     Route::prefix('notification-configs')->group(function () {
         Route::get('/', [NotificationController::class, 'config']);
         Route::put('/', [NotificationController::class, 'updateConfig']);

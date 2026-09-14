@@ -70,6 +70,11 @@ class User extends Authenticatable
         return $this->hasMany(Defect::class, 'assignee_id');
     }
 
+    public function inAppNotifications(): HasMany
+    {
+        return $this->hasMany(InAppNotification::class);
+    }
+
     public function notificationConfig(): HasOne
     {
         return $this->hasOne(NotificationConfig::class);

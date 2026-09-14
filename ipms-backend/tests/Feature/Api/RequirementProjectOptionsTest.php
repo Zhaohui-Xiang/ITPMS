@@ -37,8 +37,8 @@ class RequirementProjectOptionsTest extends TestCase
     public function test_internal_options_stay_scoped_and_non_submitters_are_denied(): void
     {
         $manager = User::factory()->withRole('it_pm')->create();
-        $own = Project::factory()->create(['manager_id' => $manager->id]);
-        Project::factory()->create();
+        $own = Project::factory()->create(['manager_id' => $manager->id, 'status' => 1]);
+        Project::factory()->create(['status' => 1]);
         $this->actingAs($manager)->getJson('/api/requirements/project-options')->assertOk()
             ->assertJsonCount(1, 'data.items')->assertJsonPath('data.items.0.id', $own->id);
         $this->actingAs(User::factory()->withRole('supplier_dev')->create())
