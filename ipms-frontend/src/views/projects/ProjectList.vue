@@ -1,9 +1,12 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, FolderChecked, RefreshLeft, Search, View } from '@element-plus/icons-vue'
-import { archiveProject, deleteProject, listProjects } from '@/api/project'
+import { Delete, FolderChecked, Plus, RefreshLeft, Search, View } from '@element-plus/icons-vue'
+import { archiveProject, createProject, deleteProject, listProjects } from '@/api/project'
+import { listUsers } from '@/api/user'
+import { getOrgTree } from '@/api/organization'
+import { allPages } from '@/api/allPages'
 import AsyncState from '@/components/common/AsyncState.vue'
 import { mapApiError } from '@/composables/useApiError'
 import { usePagination } from '@/composables/usePagination'
@@ -29,6 +32,70 @@ const status = ref('')
 const loading = ref(false)
 const error = ref(null)
 const busyProjectId = ref(null)
+const createVisible = ref(false)
+const creating = ref(false)
+const optionsLoading = ref(false)
+const optionsError = ref('')
+const createError = ref('')
+const managerOptions = ref([])
+const supplierOptions = ref([])
+const createForm = reactive({ name: '', description: '', system_type: 2, manager_id: null, supplier_org_id: null })
+
+function flattenOrganizations(nodes, prefix = '') {
+  return nodes.flatMap(node => {
+    const label = prefix + node.name
+    return [{ id: node.id, label }, ...flattenOrganizations(node.children ?? [], label + ' / ')]
+  })
+}
+
+async function loadCreateOptions() {
+  optionsLoading.value = true
+  optionsError.value = ''
+  try {
+    const users = await allPages(listUsers, { user_type: 1 })
+    const { data } = await getOrgTree({ org_type: 2 })
+    managerOptions.value = users.filter(user => user.is_active && !user.is_disabled
+      && user.roles?.some(role => role.code === 'it_pm'))
+    supplierOptions.value = flattenOrganizations(data.data)
+  } catch (failure) {
+    optionsError.value = mapApiError(failure).message
+  } finally { optionsLoading.value = false }
+}
+
+function openCreate() {
+  if (!isSuperAdmin.value) return
+  Object.assign(createForm, { name: '', description: '', system_type: 2, manager_id: null, supplier_org_id: null })
+  managerOptions.value = []
+  supplierOptions.value = []
+  createError.value = ''
+  createVisible.value = true
+  loadCreateOptions()
+}
+
+async function saveProject() {
+  if (!isSuperAdmin.value || creating.value || optionsLoading.value || optionsError.value) return
+  const managerId = Number(createForm.manager_id)
+  if (!createForm.name.trim() || !managerOptions.value.some(user => user.id === managerId)) {
+    createError.value = '请填写项目名称并选择内部 IT 项目经理'
+    return
+  }
+  creating.value = true
+  createError.value = ''
+  try {
+    await createProject({
+      name: createForm.name.trim(), description: createForm.description,
+      system_type: Number(createForm.system_type), manager_id: managerId,
+      supplier_org_id: Number(createForm.system_type) === 1 && createForm.supplier_org_id
+        ? Number(createForm.supplier_org_id) : null,
+    })
+    createVisible.value = false
+    resetPage()
+    await fetchProjects()
+    ElMessage.success('项目已创建')
+  } catch (failure) {
+    createError.value = mapApiError(failure).message
+  } finally { creating.value = false }
+}
 
 const statusTypes = {
   1: 'success',
@@ -189,7 +256,10 @@ onMounted(fetchProjects)
         <h1 class="page-title">项目管理</h1>
         <p class="page-description">查看已授权项目及其交付与发布概况</p>
       </div>
-      <span class="record-count">共 {{ total }} 个项目</span>
+      <div class="heading-actions">
+        <span class="record-count">共 {{ total }} 个项目</span>
+        <el-button v-if="isSuperAdmin" type="primary" :icon="Plus" data-testid="create-project" @click="openCreate">新建项目</el-button>
+      </div>
     </header>
 
     <section class="filter-band" aria-label="项目筛选">
@@ -238,7 +308,7 @@ onMounted(fetchProjects)
                 <th class="number-column">需求</th>
                 <th class="number-column">任务</th>
                 <th class="number-column">缺陷</th>
-                <th class="number-column">版本</th>
+                <th class="version-column">发布版本</th>
                 <th>更新时间</th>
                 <th class="action-column">操作</th>
               </tr>
@@ -266,7 +336,10 @@ onMounted(fetchProjects)
                 <td class="number-cell">{{ project.counts?.requirements ?? 0 }}</td>
                 <td class="number-cell">{{ project.counts?.tasks ?? 0 }}</td>
                 <td class="number-cell">{{ project.counts?.defects ?? 0 }}</td>
-                <td class="number-cell">{{ project.counts?.versions ?? 0 }}</td>
+                <td class="number-cell"><el-button text type="primary" :data-testid="`versions-${project.id}`"
+                  :aria-label="`发布版本 ${project.name}`" @click="router.push(`/projects/${project.id}/versions`)">
+                  发布版本（{{ project.counts?.versions ?? 0 }}）
+                </el-button></td>
                 <td>{{ formatDate(project.updated_at) }}</td>
                 <td>
                   <div class="row-actions">
@@ -319,6 +392,27 @@ onMounted(fetchProjects)
         />
       </section>
     </AsyncState>
+    <el-dialog v-model="createVisible" title="新建项目" width="min(560px, 94vw)" :close-on-click-modal="!creating" :close-on-press-escape="!creating" :show-close="!creating">
+      <el-form label-position="top" @submit.prevent="saveProject">
+        <el-form-item label="项目名称" required><el-input v-model="createForm.name" data-testid="project-name" maxlength="100" :disabled="creating" /></el-form-item>
+        <el-form-item label="系统类型" required><el-select v-model="createForm.system_type" data-testid="project-type" :disabled="creating" @change="createForm.supplier_org_id = null">
+          <el-option label="内部自研" :value="2" /><el-option label="外部采购" :value="1" />
+        </el-select></el-form-item>
+        <el-form-item label="内部 IT 项目经理" required><el-select v-model="createForm.manager_id" data-testid="project-manager" filterable :loading="optionsLoading" :disabled="creating || Boolean(optionsError)" no-data-text="暂无可用 IT 项目经理">
+          <el-option v-for="user in managerOptions" :key="user.id" :label="user.display_name" :value="user.id" />
+        </el-select></el-form-item>
+        <el-form-item v-if="Number(createForm.system_type) === 1" label="供应商组织"><el-select v-model="createForm.supplier_org_id" data-testid="project-supplier" filterable clearable :disabled="creating || Boolean(optionsError)" :loading="optionsLoading">
+          <el-option v-for="org in supplierOptions" :key="org.id" :label="org.label" :value="org.id" />
+        </el-select></el-form-item>
+        <el-form-item label="项目说明"><el-input v-model="createForm.description" type="textarea" :rows="3" :disabled="creating" /></el-form-item>
+        <p v-if="optionsError" class="form-error" role="alert">{{ optionsError }} <el-button text @click="loadCreateOptions">重试</el-button></p>
+        <p v-if="createError" class="form-error" role="alert">{{ createError }}</p>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="creating" @click="createVisible = false">取消</el-button>
+        <el-button type="primary" :loading="creating" :disabled="optionsLoading || Boolean(optionsError)" data-testid="save-project" @click="saveProject">创建</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -335,6 +429,7 @@ onMounted(fetchProjects)
   align-items: center;
   justify-content: space-between;
   gap: 24px;
+  flex-wrap: wrap;
 }
 
 .page-title {
@@ -349,6 +444,10 @@ onMounted(fetchProjects)
   color: $color-muted;
   font-size: $font-size-small;
 }
+
+.heading-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.form-error { color: $color-danger; font-size: 13px; }
+:deep(.el-dialog .el-select) { width: 100%; }
 
 .record-count {
   flex: 0 0 auto;
@@ -414,6 +513,8 @@ tbody tr:hover {
 .project-column {
   width: 230px;
 }
+
+.version-column { width: 140px; text-align: center; }
 
 .number-column {
   width: 58px;

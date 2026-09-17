@@ -3,18 +3,19 @@
 namespace App\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class StoreApiDocumentRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user()->hasPermission('document.create');
+        return $this->user()->isSuperAdmin() || $this->user()->hasPermission('document.edit_api');
     }
 
     public function rules(): array
     {
         return [
-            'folder_id' => ['nullable', 'integer', 'exists:folders,id'],
+            'folder_id' => ['nullable', 'integer', Rule::exists('folders', 'id')->where('project_id', (int) $this->route('projectId'))],
             'api_name' => ['required', 'string', 'max:200'],
             'request_path' => ['required', 'string', 'max:500'],
             'request_method' => ['required', 'string', 'in:GET,POST,PUT,PATCH,DELETE'],
@@ -22,7 +23,7 @@ class StoreApiDocumentRequest extends FormRequest
             'request_params' => ['nullable', 'array'],
             'response_params' => ['nullable', 'array'],
             'rich_text_body' => ['nullable', 'string'],
-            'requirement_id' => ['nullable', 'integer', 'exists:requirements,id'],
+            'requirement_id' => ['nullable', 'integer', Rule::exists('requirement_project', 'requirement_id')->where('project_id', (int) $this->route('projectId'))],
         ];
     }
 

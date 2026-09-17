@@ -60,7 +60,7 @@ async function apiTab() {
 }
 beforeEach(() => {
   vi.clearAllMocks()
-  api.permissions = ['document.create']
+  api.permissions = ['document.view', 'document.upload', 'document.download', 'document.delete', 'document.edit_api']
   api.listProjects.mockResolvedValue(page([{ id: 7, name: 'Cloud project' }, { id: 8, name: 'Other project' }]))
   api.listDocuments.mockResolvedValue(response({ folders: [folder()], root_documents: [file()] }))
   api.listApiDocuments.mockResolvedValue(page([apiDoc()]))
@@ -264,12 +264,22 @@ describe('DocumentView cloud API workflows', () => {
     expect(api.updateApiDocument.mock.calls[0][1]).not.toHaveProperty('version')
   })
 
-  it('requires the exact create permission while allowing project-authorized editing', async () => {
+  it('uses the seeded edit_api permission for API creation and editing', async () => {
     api.permissions = ['document.edit_api']
     await ready()
     await apiTab()
-    expect(wrapper.find('[data-testid="api-create-open"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="api-create-open"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="api-edit-31"]').exists()).toBe(true)
+  })
+
+  it('hides mutation actions from document readers', async () => {
+    api.permissions = ['document.view', 'document.download']
+    await ready()
+    expect(wrapper.get('[data-testid="upload-open"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="delete-11"]').exists()).toBe(false)
+    await apiTab()
+    expect(wrapper.find('[data-testid="api-create-open"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="api-edit-31"]').exists()).toBe(false)
   })
 
   it('creates API docs with the chosen folder and prevents invalid JSON or duplicate saves', async () => {

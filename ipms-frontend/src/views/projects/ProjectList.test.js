@@ -5,6 +5,10 @@ import ProjectList from './ProjectList.vue'
 
 const {
   archiveProject,
+  createProject,
+  listUsers,
+  getOrgTree,
+  permissions,
   deleteProject,
   listProjects,
   messageError,
@@ -13,6 +17,10 @@ const {
   routerPush,
 } = vi.hoisted(() => ({
   archiveProject: vi.fn(),
+  createProject: vi.fn(),
+  listUsers: vi.fn(),
+  getOrgTree: vi.fn(),
+  permissions: { superAdmin: true },
   deleteProject: vi.fn(),
   listProjects: vi.fn(),
   messageError: vi.fn(),
@@ -21,7 +29,9 @@ const {
   routerPush: vi.fn(),
 }))
 
-vi.mock('@/api/project', () => ({ archiveProject, deleteProject, listProjects }))
+vi.mock('@/api/project', () => ({ archiveProject, createProject, deleteProject, listProjects }))
+vi.mock('@/api/user', () => ({ listUsers }))
+vi.mock('@/api/organization', () => ({ getOrgTree }))
 vi.mock('element-plus', () => ({
   ElMessage: { error: messageError, success: messageSuccess },
   ElMessageBox: { confirm },
@@ -32,7 +42,7 @@ vi.mock('vue-router', async (importOriginal) => ({
 }))
 vi.mock('@/composables/usePermission', () => ({
   usePermission: () => ({
-    isSuperAdmin: ref(true),
+    isSuperAdmin: ref(permissions.superAdmin),
     canDelete: () => true,
     canPerform: (resource, action, localAllowed = true) => (
       localAllowed && resource.allowed_actions?.includes(action)
@@ -60,10 +70,13 @@ const stubs = {
   },
   ElButton,
   ElIcon: { template: '<i><slot /></i>' },
-  ElInput: true,
-  ElOption: true,
+  ElInput: { props: ['modelValue'], emits: ['update:modelValue'], template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />' },
+  ElDialog: { props: ['modelValue'], template: '<div v-if="modelValue"><slot /><slot name="footer" /></div>' },
+  ElForm: { template: '<form><slot /></form>' },
+  ElFormItem: { template: '<div><slot /></div>' },
+  ElOption: { props: ['value', 'label'], template: '<option :value="value">{{ label }}</option>' },
   ElPagination: true,
-  ElSelect: true,
+  ElSelect: { props: ['modelValue'], emits: ['update:modelValue', 'change'], template: '<select :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value); $emit(\'change\', $event.target.value)"><slot /></select>' },
   ElTag: { template: '<span><slot /></span>' },
   ElTooltip: { template: '<span><slot /></span>' },
   Search: true,
@@ -102,12 +115,68 @@ function mountList() {
 }
 
 describe('ProjectList real data workflow', () => {
+  it('exposes project creation to superadmin', async () => {
+    const wrapper = mountList()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="create-project"]').exists()).toBe(true)
+  })
+
+  it('offers a direct project-scoped version directory entry', async () => {
+    const wrapper = mountList()
+    await flushPromises()
+    await wrapper.get('[data-testid="versions-17"]').trigger('click')
+    expect(routerPush).toHaveBeenCalledWith('/projects/17/versions')
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
+    permissions.superAdmin = true
+    createProject.mockResolvedValue({ data: { data: { id: 31, name: 'New project' } } })
+    listUsers.mockResolvedValue(response([{ id: 9, display_name: 'IT PM', user_type: 1, is_active: true, is_disabled: false, roles: [{ code: 'it_pm' }] },
+      { id: 10, display_name: 'Developer', is_active: true, roles: [{ code: 'it_member' }] }]))
+    getOrgTree.mockResolvedValue({ data: { data: [{ id: 2, name: 'Supplier', children: [] }] } })
     listProjects.mockResolvedValue(response([project()]))
     archiveProject.mockResolvedValue({ data: { data: project([]) } })
     deleteProject.mockResolvedValue({ data: { data: null } })
     confirm.mockResolvedValue('confirm')
+  })
+
+  it('hides project creation from non-admin roles', async () => {
+    permissions.superAdmin = false
+    const wrapper = mountList()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="create-project"]').exists()).toBe(false)
+    expect(listUsers).not.toHaveBeenCalled()
+  })
+
+  it('creates a project from real directory options and reloads the list', async () => {
+    const wrapper = mountList()
+    await flushPromises()
+    await wrapper.get('[data-testid="create-project"]').trigger('click')
+    await flushPromises()
+    expect(listUsers).toHaveBeenCalledWith({ user_type: 1, page: 1, page_size: 100 })
+    expect(wrapper.get('[data-testid="project-manager"]').text()).toContain('IT PM')
+    expect(wrapper.get('[data-testid="project-manager"]').text()).not.toContain('Developer')
+    await wrapper.get('[data-testid="project-name"]').setValue(' New project ')
+    await wrapper.get('[data-testid="project-manager"]').setValue('9')
+    await wrapper.get('[data-testid="save-project"]').trigger('click')
+    await flushPromises()
+    expect(createProject).toHaveBeenCalledWith({ name: 'New project', description: '', system_type: 2, manager_id: 9, supplier_org_id: null })
+    expect(listProjects).toHaveBeenCalledTimes(2)
+  })
+
+  it('retains user input when creation fails', async () => {
+    createProject.mockRejectedValueOnce({ response: { status: 422, data: { message: 'Duplicate project' } } })
+    const wrapper = mountList()
+    await flushPromises()
+    await wrapper.get('[data-testid="create-project"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="project-name"]').setValue('New project')
+    await wrapper.get('[data-testid="project-manager"]').setValue('9')
+    await wrapper.get('[data-testid="save-project"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="project-name"]').element.value).toBe('New project')
+    expect(wrapper.text()).toContain('Duplicate project')
   })
 
   it('loads only the scoped project API and renders normalized records', async () => {

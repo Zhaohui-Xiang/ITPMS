@@ -23,7 +23,7 @@ class DocumentController extends Controller
         $user = $request->user();
         $project = Project::findOrFail($projectId);
 
-        if (!$user->can('view', $project)) {
+        if ((!$user->isSuperAdmin() && !$user->hasPermission('document.view')) || !$user->can('view', $project)) {
             return response()->json(['code' => 403, 'message' => '您无权查看该项目文档'], 403);
         }
 
@@ -62,7 +62,7 @@ class DocumentController extends Controller
         $user = $request->user();
         $project = Project::findOrFail($projectId);
 
-        if (!$user->can('view', $project)) {
+        if ((!$user->isSuperAdmin() && !$user->hasPermission('document.upload')) || !$user->can('view', $project)) {
             return response()->json(['code' => 403, 'message' => '您无权上传文件到该项目'], 403);
         }
 
@@ -113,7 +113,7 @@ class DocumentController extends Controller
         $user = $request->user();
         $project = Project::findOrFail($projectId);
 
-        if (!$user->can('view', $project)) {
+        if ((!$user->isSuperAdmin() && !$user->hasPermission('document.upload')) || !$user->can('view', $project)) {
             return response()->json(['code' => 403, 'message' => '您无权操作该项目文档'], 403);
         }
 
@@ -174,7 +174,7 @@ class DocumentController extends Controller
         $document = Document::findOrFail($id);
 
         $project = $document->project;
-        if (!$user->can('view', $project)) {
+        if ((!$user->isSuperAdmin() && !$user->hasPermission('document.download')) || !$user->can('view', $project)) {
             return response()->json(['code' => 403, 'message' => '您无权下载该文件'], 403);
         }
 
@@ -195,7 +195,7 @@ class DocumentController extends Controller
         $document = Document::findOrFail($id);
 
         $project = $document->project;
-        if (!$user->can('view', $project)) {
+        if ((!$user->isSuperAdmin() && !$user->hasPermission('document.delete')) || !$user->can('view', $project)) {
             return response()->json(['code' => 403, 'message' => '您无权删除该文件'], 403);
         }
 

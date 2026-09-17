@@ -11,6 +11,7 @@ use App\Models\Project;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class ApiDocumentController extends Controller
 {
@@ -23,7 +24,7 @@ class ApiDocumentController extends Controller
         $user = $request->user();
         $project = Project::findOrFail($projectId);
 
-        if (!$user->can('view', $project)) {
+        if ((!$user->isSuperAdmin() && !$user->hasPermission('document.view')) || !$user->can('view', $project)) {
             return response()->json(['code' => 403, 'message' => '您无权查看该项目接口文档'], 403);
         }
 
@@ -75,8 +76,8 @@ class ApiDocumentController extends Controller
             'request_path' => $request->input('request_path'),
             'request_method' => $request->input('request_method'),
             'auth_type' => $request->input('auth_type'),
-            'request_params' => $request->input('request_params'),
-            'response_params' => $request->input('response_params'),
+            'request_params' => $request->input('request_params') ?? [],
+            'response_params' => $request->input('response_params') ?? [],
             'rich_text_body' => $request->input('rich_text_body'),
             'requirement_id' => $request->input('requirement_id'),
             'version' => 1,
@@ -116,7 +117,7 @@ class ApiDocumentController extends Controller
             'updater:id,display_name',
         ])->findOrFail($id);
 
-        if (!$user->can('view', $apiDoc->project)) {
+        if ((!$user->isSuperAdmin() && !$user->hasPermission('document.view')) || !$user->can('view', $apiDoc->project)) {
             return response()->json(['code' => 403, 'message' => '您无权查看该接口文档'], 403);
         }
 
@@ -136,7 +137,7 @@ class ApiDocumentController extends Controller
         $user = $request->user();
         $apiDoc = ApiDocument::findOrFail($id);
 
-        if (!$user->can('view', $apiDoc->project)) {
+        if ((!$user->isSuperAdmin() && !$user->hasPermission('document.edit_api')) || !$user->can('view', $apiDoc->project)) {
             return response()->json(['code' => 403, 'message' => '您无权编辑该接口文档'], 403);
         }
 
@@ -148,13 +149,18 @@ class ApiDocumentController extends Controller
             'request_params' => ['nullable', 'array'],
             'response_params' => ['nullable', 'array'],
             'rich_text_body' => ['nullable', 'string'],
-            'requirement_id' => ['nullable', 'integer', 'exists:requirements,id'],
+            'requirement_id' => ['nullable', 'integer', Rule::exists('requirement_project', 'requirement_id')->where('project_id', $apiDoc->project_id)],
         ]);
 
         $data = $request->only([
             'api_name', 'request_path', 'request_method', 'auth_type',
             'request_params', 'response_params', 'rich_text_body', 'requirement_id',
         ]);
+        foreach (['request_params', 'response_params'] as $field) {
+            if (array_key_exists($field, $data) && $data[$field] === null) {
+                $data[$field] = [];
+            }
+        }
         $data['updated_by_id'] = $user->id;
 
         // 版本号递增
@@ -200,7 +206,7 @@ class ApiDocumentController extends Controller
         $user = $request->user();
         $apiDoc = ApiDocument::findOrFail($id);
 
-        if (!$user->can('view', $apiDoc->project)) {
+        if ((!$user->isSuperAdmin() && !$user->hasPermission('document.view')) || !$user->can('view', $apiDoc->project)) {
             return response()->json(['code' => 403, 'message' => '您无权查看该接口文档'], 403);
         }
 
@@ -225,7 +231,7 @@ class ApiDocumentController extends Controller
         $user = $request->user();
         $apiDoc = ApiDocument::with('project:id,name')->findOrFail($id);
 
-        if (!$user->can('view', $apiDoc->project)) {
+        if ((!$user->isSuperAdmin() && !$user->hasPermission('document.view')) || !$user->can('view', $apiDoc->project)) {
             return response()->json(['code' => 403, 'message' => '您无权导出该接口文档'], 403);
         }
 

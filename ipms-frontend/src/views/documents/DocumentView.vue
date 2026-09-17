@@ -57,10 +57,9 @@ const currentFolder = computed(() => flatFolders.value.find(item => item.id === 
 const breadcrumbs = computed(() => currentFolder.value?.path ?? [])
 const incompleteFolder = computed(() => Boolean(currentFolder.value && !Array.isArray(currentFolder.value.documents)))
 const canManageFiles = computed(() => filesReady.value && !filesLoading.value && !filesError.value)
-const canUpload = computed(() => canManageFiles.value && !incompleteFolder.value)
-const canCreateFolder = computed(() => canManageFiles.value && (!currentFolder.value || currentFolder.value.path.length < 3))
-// StoreApiDocumentRequest checks the actual permission, without a super-admin bypass.
-const canCreateApi = computed(() => apiReady.value && !apiError.value && auth.permissions.includes('document.create'))
+const canUpload = computed(() => canManageFiles.value && auth.permissions.includes('document.upload') && !incompleteFolder.value)
+const canCreateFolder = computed(() => canManageFiles.value && auth.permissions.includes('document.upload') && (!currentFolder.value || currentFolder.value.path.length < 3))
+const canCreateApi = computed(() => apiReady.value && !apiError.value && auth.permissions.includes('document.edit_api'))
 const currentEntries = computed(() => {
   const childFolders = currentFolder.value ? currentFolder.value.children ?? [] : folders.value
   const documents = currentFolder.value ? currentFolder.value.documents ?? [] : rootDocuments.value
@@ -211,7 +210,8 @@ function setPageSize(size) {
 }
 function retryTable() { return activeTab.value === 'files' ? loadFiles() : loadApis() }
 function allowed(row, action) {
-  return !Array.isArray(row.allowed_actions) || row.allowed_actions.includes(action)
+  const permission = { download: 'document.download', delete: 'document.delete', update: 'document.edit_api', export: 'document.view' }[action]
+  return auth.permissions.includes(permission) && (!Array.isArray(row.allowed_actions) || row.allowed_actions.includes(action))
 }
 function errorText(error) {
   const mapped = mapApiError(error)
