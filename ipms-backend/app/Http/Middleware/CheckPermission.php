@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Support\ApiResponse;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -19,16 +20,16 @@ class CheckPermission
         $user = $request->user();
 
         if (!$user) {
-            return response()->json([
-                'message' => '未登录，请先登录。',
-            ], 401);
+            return ApiResponse::error('UNAUTHENTICATED', 'Unauthenticated.', 401);
         }
 
         if (!$user->hasPermission($permission)) {
-            return response()->json([
-                'message' => '权限不足，无法执行此操作。',
-                'required_permission' => $permission,
-            ], 403);
+            return ApiResponse::error(
+                'FORBIDDEN',
+                '权限不足，无法执行此操作。',
+                403,
+                ['required_permission' => $permission],
+            );
         }
 
         return $next($request);

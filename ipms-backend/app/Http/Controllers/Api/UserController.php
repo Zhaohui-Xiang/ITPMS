@@ -30,7 +30,7 @@ class UserController extends Controller
                 ->with('organizations:id,name,org_type');
 
         } else {
-            return response()->json(['code' => 403, 'message' => '您无权查看用户列表'], 403);
+            return ApiResponse::error('FORBIDDEN', '您无权查看用户列表', 403);
         }
 
         // 按用户类型筛选
@@ -74,7 +74,7 @@ class UserController extends Controller
         $canCreate = $currentUser->isSuperAdmin();
 
         if (! $canCreate) {
-            return response()->json(['code' => 403, 'message' => '您无权创建用户'], 403);
+            return ApiResponse::error('FORBIDDEN', '您无权创建用户', 403);
         }
 
         $this->normalizeEmail($request);
@@ -163,7 +163,7 @@ class UserController extends Controller
 
             && $currentUser->id !== $user->id
         ) {
-            return response()->json(['code' => 403, 'message' => '您无权查看该用户'], 403);
+            return ApiResponse::error('FORBIDDEN', '您无权查看该用户', 403);
         }
 
         return response()->json([
@@ -214,7 +214,7 @@ class UserController extends Controller
         $currentUser = $request->user();
 
         if (! $currentUser->isSuperAdmin()) {
-            return response()->json(['code' => 403, 'message' => '仅超级管理员可以禁用用户'], 403);
+            return ApiResponse::error('FORBIDDEN', '仅超级管理员可以禁用用户', 403);
         }
 
         $user = User::findOrFail($id);

@@ -25,7 +25,7 @@ class ApiDocumentController extends Controller
         $project = Project::findOrFail($projectId);
 
         if ((!$user->isSuperAdmin() && !$user->hasPermission('document.view')) || !$user->can('view', $project)) {
-            return response()->json(['code' => 403, 'message' => '您无权查看该项目接口文档'], 403);
+            return ApiResponse::error('FORBIDDEN', '您无权查看该项目接口文档', 403);
         }
 
         $query = ApiDocument::where('project_id', $projectId)
@@ -66,7 +66,7 @@ class ApiDocumentController extends Controller
         $project = Project::findOrFail($projectId);
 
         if (!$user->can('view', $project)) {
-            return response()->json(['code' => 403, 'message' => '您无权操作该项目'], 403);
+            return ApiResponse::error('FORBIDDEN', '您无权操作该项目', 403);
         }
 
         $apiDoc = ApiDocument::create([
@@ -118,7 +118,7 @@ class ApiDocumentController extends Controller
         ])->findOrFail($id);
 
         if ((!$user->isSuperAdmin() && !$user->hasPermission('document.view')) || !$user->can('view', $apiDoc->project)) {
-            return response()->json(['code' => 403, 'message' => '您无权查看该接口文档'], 403);
+            return ApiResponse::error('FORBIDDEN', '您无权查看该接口文档', 403);
         }
 
         return response()->json([
@@ -138,7 +138,7 @@ class ApiDocumentController extends Controller
         $apiDoc = ApiDocument::findOrFail($id);
 
         if ((!$user->isSuperAdmin() && !$user->hasPermission('document.edit_api')) || !$user->can('view', $apiDoc->project)) {
-            return response()->json(['code' => 403, 'message' => '您无权编辑该接口文档'], 403);
+            return ApiResponse::error('FORBIDDEN', '您无权编辑该接口文档', 403);
         }
 
         $request->validate([
@@ -207,7 +207,7 @@ class ApiDocumentController extends Controller
         $apiDoc = ApiDocument::findOrFail($id);
 
         if ((!$user->isSuperAdmin() && !$user->hasPermission('document.view')) || !$user->can('view', $apiDoc->project)) {
-            return response()->json(['code' => 403, 'message' => '您无权查看该接口文档'], 403);
+            return ApiResponse::error('FORBIDDEN', '您无权查看该接口文档', 403);
         }
 
         $versions = $apiDoc->versions()
@@ -232,7 +232,7 @@ class ApiDocumentController extends Controller
         $apiDoc = ApiDocument::with('project:id,name')->findOrFail($id);
 
         if ((!$user->isSuperAdmin() && !$user->hasPermission('document.view')) || !$user->can('view', $apiDoc->project)) {
-            return response()->json(['code' => 403, 'message' => '您无权导出该接口文档'], 403);
+            return ApiResponse::error('FORBIDDEN', '您无权导出该接口文档', 403);
         }
 
         // 构建 OpenAPI 3.0 规范 JSON

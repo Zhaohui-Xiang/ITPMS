@@ -15,6 +15,7 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -73,6 +74,18 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(function (AccessDeniedHttpException $exception, Request $request) {
             if ($request->is('api/*')) {
                 return ApiResponse::error('FORBIDDEN', $exception->getMessage(), 403);
+            }
+        });
+
+        // Plain abort(403) / abort_unless(..., 403) throws HttpException, which is
+        // neither AuthorizationException nor AccessDeniedHttpException.
+        $exceptions->render(function (HttpException $exception, Request $request) {
+            if ($request->is('api/*') && $exception->getStatusCode() === 403) {
+                return ApiResponse::error(
+                    'FORBIDDEN',
+                    $exception->getMessage() !== '' ? $exception->getMessage() : '权限不足，无法执行此操作。',
+                    403,
+                );
             }
         });
 

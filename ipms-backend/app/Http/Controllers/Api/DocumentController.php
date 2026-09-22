@@ -11,6 +11,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
+use App\Support\ApiResponse;
 
 class DocumentController extends Controller
 {
@@ -24,7 +25,7 @@ class DocumentController extends Controller
         $project = Project::findOrFail($projectId);
 
         if ((!$user->isSuperAdmin() && !$user->hasPermission('document.view')) || !$user->can('view', $project)) {
-            return response()->json(['code' => 403, 'message' => '您无权查看该项目文档'], 403);
+            return ApiResponse::error('FORBIDDEN', '您无权查看该项目文档', 403);
         }
 
         // 获取文件夹树
@@ -63,7 +64,7 @@ class DocumentController extends Controller
         $project = Project::findOrFail($projectId);
 
         if ((!$user->isSuperAdmin() && !$user->hasPermission('document.upload')) || !$user->can('view', $project)) {
-            return response()->json(['code' => 403, 'message' => '您无权上传文件到该项目'], 403);
+            return ApiResponse::error('FORBIDDEN', '您无权上传文件到该项目', 403);
         }
 
         $request->validate([
@@ -114,7 +115,7 @@ class DocumentController extends Controller
         $project = Project::findOrFail($projectId);
 
         if ((!$user->isSuperAdmin() && !$user->hasPermission('document.upload')) || !$user->can('view', $project)) {
-            return response()->json(['code' => 403, 'message' => '您无权操作该项目文档'], 403);
+            return ApiResponse::error('FORBIDDEN', '您无权操作该项目文档', 403);
         }
 
         $request->validate([
@@ -175,7 +176,7 @@ class DocumentController extends Controller
 
         $project = $document->project;
         if ((!$user->isSuperAdmin() && !$user->hasPermission('document.download')) || !$user->can('view', $project)) {
-            return response()->json(['code' => 403, 'message' => '您无权下载该文件'], 403);
+            return ApiResponse::error('FORBIDDEN', '您无权下载该文件', 403);
         }
 
         if (!Storage::disk('public')->exists($document->file)) {
@@ -196,7 +197,7 @@ class DocumentController extends Controller
 
         $project = $document->project;
         if ((!$user->isSuperAdmin() && !$user->hasPermission('document.delete')) || !$user->can('view', $project)) {
-            return response()->json(['code' => 403, 'message' => '您无权删除该文件'], 403);
+            return ApiResponse::error('FORBIDDEN', '您无权删除该文件', 403);
         }
 
         $document->deleted_by_id = $user->id;
