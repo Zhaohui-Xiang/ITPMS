@@ -156,6 +156,15 @@ final class RequirementController extends Controller
         );
     }
 
+    public function executionOwnerOptions(Request $request, int $id): JsonResponse
+    {
+        $requirement = Requirement::with('projects')->findOrFail($id);
+        Gate::forUser($request->user())->authorize('update', $requirement);
+        Gate::forUser($request->user())->authorize('assign', $requirement);
+
+        return ApiResponse::success(app(\App\Services\RequirementExecutionOwners::class)->options($requirement));
+    }
+
     public function review(ReviewRequirementRequest $request, int $id): JsonResponse
     {
         $requirement = Requirement::query()->findOrFail($id);

@@ -7,12 +7,23 @@ import { getProject } from '@/api/project'
 import { listRequirements } from '@/api/requirement'
 import { listDefects } from '@/api/defect'
 import AsyncState from '@/components/common/AsyncState.vue'
+import ProjectMembers from '@/components/projects/ProjectMembers.vue'
 import { mapApiError } from '@/composables/useApiError'
 
 const route = useRoute()
 const router = useRouter()
 const projectId = computed(() => route.params.id)
-const activeTab = computed(() => route.query.tab || 'overview')
+const canManageMembers = computed(() => project.value?.allowed_actions?.includes('manage_members'))
+const tabs = computed(() => [
+  { key: 'overview', label: '项目概览' },
+  { key: 'versions', label: '发布版本' },
+  { key: 'requirements', label: '关联需求' },
+  { key: 'defects', label: '近期缺陷' },
+  ...(canManageMembers.value ? [{ key: 'members', label: '项目成员' }] : []),
+])
+const activeTab = computed(() => (
+  tabs.value.some(tab => tab.key === route.query.tab) ? route.query.tab : 'overview'
+))
 
 const project = ref(null)
 const requirements = ref([])
@@ -126,12 +137,7 @@ onMounted(loadWorkspace)
 
     <nav class="workspace-tabs" aria-label="项目工作区">
       <button
-        v-for="tab in [
-          { key: 'overview', label: '项目概览' },
-          { key: 'versions', label: '发布版本' },
-          { key: 'requirements', label: '关联需求' },
-          { key: 'defects', label: '近期缺陷' },
-        ]"
+        v-for="tab in tabs"
         :key="tab.key"
         type="button"
         :class="{ 'is-active': activeTab === tab.key }"
@@ -210,6 +216,12 @@ onMounted(loadWorkspace)
           </div>
         </section>
       </section>
+
+      <ProjectMembers
+        v-else-if="activeTab === 'members' && canManageMembers && project"
+        :key="project.id"
+        :project="project"
+      />
 
       <section v-else-if="activeTab === 'requirements'" class="data-band">
         <div class="section-heading">

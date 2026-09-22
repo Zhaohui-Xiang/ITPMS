@@ -7,6 +7,7 @@ use App\Enums\ProjectVersionStatus;
 use App\Enums\RequirementStatus;
 use App\Exceptions\DomainConflictException;
 use App\Http\Middleware\AuditLogger;
+use App\Models\Project;
 use App\Models\ProjectVersion;
 use App\Models\ProjectVersionHistory;
 use App\Models\Requirement;
@@ -71,6 +72,8 @@ class RequirementWorkflowService
                 $data['project_ids'] ?? [],
             );
 
+            $this->assertExpectedVersion($locked, $data);
+
             if ($locked->isRejectedForResubmission()) {
                 return RequirementUpdateResult::resubmitted(
                     $this->resubmitLocked($locked, $actor, $data, $links, $versions),
@@ -97,6 +100,13 @@ class RequirementWorkflowService
                 $projectIds = $this->normalizeProjectIds($data['project_ids']);
                 $oldProjectIds = $this->lockedProjectIds($links);
             }
+
+            $this->assertExecutionOwnerAssignment(
+                $locked,
+                $actor,
+                $data,
+                $projectIds ?? $this->lockedProjectIds($links),
+            );
 
             $changes = $this->revisionChanges(
                 $locked,
@@ -199,6 +209,7 @@ class RequirementWorkflowService
                 $data['project_ids'] ?? [],
             );
 
+            $this->assertExpectedVersion($locked, $data);
             return $this->resubmitLocked($locked, $requester, $data, $links, $versions);
         });
     }
@@ -347,6 +358,13 @@ class RequirementWorkflowService
         });
     }
 
+    private function assertExpectedVersion(Requirement $locked, array $data): void
+    {
+        if (isset($data['version']) && (int) $locked->version !== $data['version']) {
+            throw new DomainConflictException('STALE_VERSION', message: '需求已被更新，请刷新后重新确认。');
+        }
+    }
+
     private function resubmitLocked(
         Requirement $locked,
         User $requester,
@@ -371,6 +389,8 @@ class RequirementWorkflowService
         $projectIds = array_key_exists('project_ids', $data)
             ? $this->normalizeProjectIds($data['project_ids'])
             : $oldProjectIds;
+
+        $this->assertExecutionOwnerAssignment($locked, $requester, $data, $projectIds);
         $changes = $this->revisionChanges($locked, $data, $projectIds, $oldProjectIds);
         $newVersion = $locked->version + 1;
 
@@ -399,6 +419,41 @@ class RequirementWorkflowService
         ]);
 
         return $this->freshRequirement($locked);
+    }
+
+    /**
+     * @param  list<int>  $projectIds
+     */
+    private function assertExecutionOwnerAssignment(
+        Requirement $locked,
+        User $actor,
+        array $data,
+        array $projectIds,
+    ): void {
+        if (! array_key_exists('dev_lead_id', $data)) {
+            return;
+        }
+
+        Gate::forUser($actor)->authorize('update', $locked);
+        Gate::forUser($actor)->authorize('assign', $locked);
+
+        if ($data['dev_lead_id'] === null) {
+            return;
+        }
+
+        // Use the post-edit scope, with full project attributes and the membership lock order.
+        $projects = Project::query()->whereKey($projectIds)->orderBy('id')->lockForUpdate()->get();
+        $candidate = User::query()->whereKey($data['dev_lead_id'])->lockForUpdate()->first();
+        $scope = clone $locked;
+        $scope->setRelation('projects', $projects);
+
+        if ($candidate === null
+            || $projects->count() !== count($projectIds)
+            || ! app(RequirementExecutionOwners::class)->eligible($candidate, $scope)) {
+            throw ValidationException::withMessages([
+                'dev_lead_id' => '执行负责人必须是有效且有全部关联项目权限的交付人员。',
+            ]);
+        }
     }
 
     private function initializeApprovedProjectsLocked(

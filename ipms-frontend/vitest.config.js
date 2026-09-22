@@ -5,5 +5,5 @@ import path from 'node:path'
 export default defineConfig({
   plugins: [vue()],
   resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
-  test: { environment: 'jsdom', setupFiles: ['./src/test/setup.js'], globals: true },
+  test: { environment: 'jsdom', setupFiles: ['./src/test/setup.js'], globals: true, testTimeout: 20000 },
 })

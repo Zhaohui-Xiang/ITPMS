@@ -13,9 +13,13 @@ const props = defineProps({
     type: Object,
     required: true,
   },
+  disabled: {
+    type: Boolean,
+    default: false,
+  },
 })
 
-const emit = defineEmits(['changed', 'stale'])
+const emit = defineEmits(['changed', 'stale', 'busy'])
 
 const readonlyStatuses = ['READY_TO_RELEASE', 'RELEASED', 'ARCHIVED']
 const unplanned = ref([])
@@ -95,11 +99,18 @@ async function loadPool() {
   }
 }
 
+async function refreshPool() {
+  if (props.disabled || busyKey.value || loading.value) return
+  await loadPool()
+}
+
 async function plan(requirement) {
+  if (!canMutate.value || props.disabled || busyKey.value) return
   if (!validateReason()) return
 
   const key = `plan-${requirement.id}`
   busyKey.value = key
+  emit('busy', true)
   try {
     const response = await planRequirementVersion(
       requirement.id,
@@ -118,15 +129,18 @@ async function plan(requirement) {
     ElMessage.error(error?.response?.data?.message ?? '规划需求失败')
   } finally {
     busyKey.value = ''
+    emit('busy', false)
   }
 }
 
 async function unplan(scopeItem) {
+  if (!canMutate.value || props.disabled || busyKey.value) return
   if (!validateReason()) return
 
   const requirementId = scopeItem.requirement_id ?? scopeItem.requirement?.id
   const key = `unplan-${requirementId}`
   busyKey.value = key
+  emit('busy', true)
   try {
     const response = await unplanRequirementVersion(
       requirementId,
@@ -144,6 +158,7 @@ async function unplan(scopeItem) {
     ElMessage.error(error?.response?.data?.message ?? '移出版本范围失败')
   } finally {
     busyKey.value = ''
+    emit('busy', false)
   }
 }
 
@@ -175,7 +190,8 @@ onMounted(loadPool)
           aria-label="刷新未规划需求"
           :icon="RefreshLeft"
           :loading="loading"
-          @click="loadPool"
+          :disabled="disabled || Boolean(busyKey)"
+          @click="refreshPool"
         />
       </el-tooltip>
     </header>
@@ -217,6 +233,7 @@ onMounted(loadPool)
             link
             :icon="Remove"
             :loading="busyKey === `unplan-${item.requirement_id}`"
+            :disabled="disabled || Boolean(busyKey)"
             @click="unplan(item)"
           >
             移出
@@ -248,6 +265,7 @@ onMounted(loadPool)
             link
             :icon="Plus"
             :loading="busyKey === `plan-${requirement.id}`"
+            :disabled="disabled || Boolean(busyKey)"
             @click="plan(requirement)"
           >
             加入

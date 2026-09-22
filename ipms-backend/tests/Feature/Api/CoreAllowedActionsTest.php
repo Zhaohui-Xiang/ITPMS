@@ -46,12 +46,12 @@ class CoreAllowedActionsTest extends TestCase
         $fixture = $this->fixture();
         $expected = [
             'requester' => [],
-            'it_pm' => ['create_version'],
+            'it_pm' => ['manage_members', 'create_version'],
             'it_member' => [],
             'supplier_pm' => [],
             'supplier_dev' => [],
             'supplier_tester' => [],
-            'superadmin' => ['edit', 'archive', 'delete'],
+            'superadmin' => ['manage_members', 'edit', 'archive', 'delete'],
         ];
 
         foreach ($expected as $actor => $actions) {
@@ -72,12 +72,12 @@ class CoreAllowedActionsTest extends TestCase
         $fixture = $this->fixture();
         $expected = [
             'requester' => ['edit'],
-            'it_pm' => ['edit', 'transition_project', 'create_task'],
+            'it_pm' => ['edit', 'assign_owner', 'transition_project', 'create_task'],
             'it_member' => ['edit', 'transition_project', 'create_task'],
             'supplier_pm' => ['transition_project', 'create_task'],
             'supplier_dev' => [],
             'supplier_tester' => [],
-            'superadmin' => ['edit', 'transition_project', 'create_task'],
+            'superadmin' => ['edit', 'assign_owner', 'transition_project', 'create_task'],
         ];
 
         foreach ($expected as $actor => $actions) {
@@ -382,7 +382,7 @@ class CoreAllowedActionsTest extends TestCase
         $this->actingAs($fixture['it_pm'])
             ->getJson("/api/requirements/{$fixture['requirement']->id}")
             ->assertOk()
-            ->assertJsonPath('data.allowed_actions', ['edit', 'review']);
+            ->assertJsonPath('data.allowed_actions', ['edit', 'assign_owner', 'review']);
         $this->actingAs($fixture['requester'])
             ->getJson("/api/requirements/{$fixture['requirement']->id}")
             ->assertOk()

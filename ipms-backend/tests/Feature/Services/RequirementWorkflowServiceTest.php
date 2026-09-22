@@ -213,7 +213,6 @@ class RequirementWorkflowServiceTest extends TestCase
     {
         $requester = User::factory()->systemUser()->create();
         $reviewer = User::factory()->internal()->create();
-        $devLead = User::factory()->internal()->create();
         $oldProject = Project::factory()->create();
         $newProject = Project::factory()->create();
         $requirement = Requirement::factory()->create([
@@ -231,7 +230,6 @@ class RequirementWorkflowServiceTest extends TestCase
         $result = $this->service()->resubmit($requirement, $requester, [
             'title' => 'Revision four',
             'priority' => 1,
-            'dev_lead_id' => $devLead->id,
             'project_ids' => [$newProject->id],
         ]);
 
@@ -239,7 +237,7 @@ class RequirementWorkflowServiceTest extends TestCase
         $this->assertNull($result->reviewer_id);
         $this->assertNull($result->review_comment);
         $this->assertNull($result->reviewed_at);
-        $this->assertSame($devLead->id, $result->dev_lead_id);
+        $this->assertNull($result->dev_lead_id);
         $this->assertSame(RequirementStatus::PENDING_REVIEW->value, $result->status);
         $this->assertSame([$newProject->id], $result->projectLinks()->pluck('project_id')->all());
         $this->assertSame(1, RequirementVersion::query()
@@ -253,7 +251,7 @@ class RequirementWorkflowServiceTest extends TestCase
         $this->assertSame($requester->id, $snapshot->changed_by_id);
         $this->assertSame('Requirement resubmitted', $snapshot->change_summary);
         $this->assertSame(
-            ['title', 'priority', 'dev_lead_id', 'project_ids'],
+            ['title', 'priority', 'project_ids'],
             collect($snapshot->changes)->pluck('field')->all(),
         );
     }
@@ -516,7 +514,6 @@ class RequirementWorkflowServiceTest extends TestCase
     public function test_pending_requirement_update_adds_project_and_records_one_complete_revision(): void
     {
         $requester = $this->userWithPermission('requester', 'requirement.edit');
-        $devLead = User::factory()->internal()->create();
         $firstProject = Project::factory()->create();
         $secondProject = Project::factory()->create();
         $requirement = Requirement::factory()->create([
@@ -531,12 +528,11 @@ class RequirementWorkflowServiceTest extends TestCase
         $this->actingAs($requester)
             ->putJson("/api/requirements/{$requirement->id}", [
                 'title' => 'Revised title',
-                'dev_lead_id' => $devLead->id,
                 'project_ids' => [$firstProject->id, $secondProject->id],
             ])->assertOk()
             ->assertJsonPath('code', 200)
             ->assertJsonPath('data.version', 2)
-            ->assertJsonPath('data.dev_lead_id', $devLead->id);
+            ->assertJsonPath('data.dev_lead_id', null);
 
         $requirement->refresh();
         $this->assertSame(2, $requirement->version);
@@ -547,7 +543,7 @@ class RequirementWorkflowServiceTest extends TestCase
         $this->assertDatabaseCount('requirement_versions', 1);
         $snapshot = RequirementVersion::query()->sole();
         $this->assertSame(
-            ['dev_lead_id', 'project_ids', 'title'],
+            ['project_ids', 'title'],
             collect($snapshot->changes)->pluck('field')->sort()->values()->all(),
         );
         $this->assertDatabaseCount('audit_logs', 1);
@@ -816,8 +812,8 @@ class RequirementWorkflowServiceTest extends TestCase
     {
         $requester = $this->userWithPermission('requester', 'requirement.edit');
         $reviewer = User::factory()->internal()->create();
-        $devLead = User::factory()->internal()->create();
         $project = Project::factory()->create();
+        $newProject = Project::factory()->create();
         $requirement = Requirement::factory()->create([
             'submitter_id' => $requester->id,
             'created_by_id' => $requester->id,
@@ -834,7 +830,7 @@ class RequirementWorkflowServiceTest extends TestCase
         $this->actingAs($requester)
             ->postJson("/api/requirements/{$requirement->id}/resubmit", [
                 'title' => 'Should roll back',
-                'dev_lead_id' => $devLead->id,
+                'project_ids' => [$newProject->id],
             ])->assertInternalServerError();
 
         $requirement->refresh();
@@ -843,6 +839,7 @@ class RequirementWorkflowServiceTest extends TestCase
         $this->assertSame($reviewer->id, $requirement->reviewer_id);
         $this->assertSame('Rejected', $requirement->review_comment);
         $this->assertNull($requirement->dev_lead_id);
+        $this->assertSame([$project->id], $requirement->projectLinks()->pluck('project_id')->all());
         $this->assertDatabaseCount('requirement_versions', 0);
         $this->assertDatabaseCount('audit_logs', 0);
     }

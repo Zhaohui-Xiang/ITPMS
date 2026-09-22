@@ -30,6 +30,18 @@ class ProjectPolicy
         };
     }
 
+    public function manageMembers(User $user, Project $project): bool
+    {
+        return $user->is_active
+            && ! $user->is_disabled
+            && $project->status !== ProjectStatus::ARCHIVED->value
+            && ($user->isSuperAdmin()
+                || ($user->user_type === UserType::INTERNAL->value
+                    && $project->manager_id === $user->id
+                    && $user->roles()->where('code', 'it_pm')->exists()
+                    && $user->hasPermission('project.view')));
+    }
+
     public function create(User $user): bool
     {
         return $user->isSuperAdmin();

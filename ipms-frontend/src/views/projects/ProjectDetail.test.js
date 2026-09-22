@@ -1,6 +1,8 @@
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ProjectDetail from './ProjectDetail.vue'
+import ProjectMembers from '@/components/projects/ProjectMembers.vue'
+const route = vi.hoisted(() => ({ params: { id: '12' }, query: {} }))
 
 const {
   getProject,
@@ -26,7 +28,7 @@ vi.mock('element-plus', () => ({
 }))
 vi.mock('vue-router', async (importOriginal) => ({
   ...await importOriginal(),
-  useRoute: () => ({ params: { id: '12' }, query: {} }),
+  useRoute: () => route,
   useRouter: () => ({ push: routerPush, replace: routerReplace }),
 }))
 
@@ -45,6 +47,7 @@ const paginated = (items) => ({
 describe('ProjectDetail live project workspace', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    route.query = {}
     getProject.mockResolvedValue({
       data: {
         data: {
@@ -102,5 +105,31 @@ describe('ProjectDetail live project workspace', () => {
     })
     expect(wrapper.text()).toContain('数据库项目')
     expect(wrapper.text()).not.toContain('SAP B1')
+  })
+  it('shows the membership tab and renders the scoped panel for managers', async () => {
+    const project = { id: 12, name: 'Managed project', allowed_actions: ['manage_members'] }
+    getProject.mockResolvedValue({ data: { data: project } })
+    route.query = { tab: 'members' }
+    const wrapper = shallowMount(ProjectDetail, { global: { stubs: {
+      ElButton: { template: '<button><slot /></button>' },
+      AsyncState: { template: '<div><slot /></div>' },
+    } } })
+    await flushPromises()
+    const tab = wrapper.findAll('nav button').find(button => button.text() === '项目成员')
+    expect(tab).toBeDefined()
+    expect(wrapper.findComponent(ProjectMembers).props('project')).toEqual(project)
+    await tab.trigger('click')
+    expect(routerReplace).toHaveBeenCalledWith({ name: 'ProjectDetail', params: { id: '12' }, query: { tab: 'members' } })
+  })
+  it('does not expose membership via a forged tab query without manage_members', async () => {
+    route.query = { tab: 'members' }
+    const wrapper = shallowMount(ProjectDetail, { global: { stubs: {
+      ElButton: { template: '<button><slot /></button>' },
+      AsyncState: { template: '<div><slot /></div>' },
+    } } })
+    await flushPromises()
+    expect(wrapper.findComponent(ProjectMembers).exists()).toBe(false)
+    expect(wrapper.findAll('nav button').some(button => button.text() === '项目成员')).toBe(false)
+    expect(wrapper.find('.overview-layout').exists()).toBe(true)
   })
 })

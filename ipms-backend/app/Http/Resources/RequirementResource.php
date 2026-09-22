@@ -144,6 +144,9 @@ final class RequirementResource extends JsonResource
         $actions = [];
         if (Gate::forUser($user)->allows('update', $this->resource)) {
             $actions[] = 'edit';
+            if (Gate::forUser($user)->allows('assign', $this->resource)) {
+                $actions[] = 'assign_owner';
+            }
         }
         if ($isPendingReview
             && ! $isRejected

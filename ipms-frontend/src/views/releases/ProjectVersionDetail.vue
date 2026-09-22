@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   ArrowLeft,
+  Edit,
   Refresh,
   UploadFilled,
   VideoPlay,
@@ -15,11 +16,13 @@ import {
   listProjectVersionHistory,
   releaseProjectVersion,
   transitionProjectVersion,
+  updateProjectVersion,
 } from '@/api/projectVersion'
 import AsyncState from '@/components/common/AsyncState.vue'
 import ReleaseDialog from '@/components/releases/ReleaseDialog.vue'
 import ReleaseGatePanel from '@/components/releases/ReleaseGatePanel.vue'
 import RequirementPlanner from '@/components/releases/RequirementPlanner.vue'
+import VersionEditDialog from '@/components/releases/VersionEditDialog.vue'
 import VersionHistory from '@/components/releases/VersionHistory.vue'
 import VersionProgress from '@/components/releases/VersionProgress.vue'
 import VersionStatusTag from '@/components/releases/VersionStatusTag.vue'
@@ -55,11 +58,23 @@ const gateResult = ref(null)
 const historyItems = ref([])
 const loading = ref(false)
 const commandBusy = ref(false)
+const scopeBusy = ref(false)
 const error = ref(null)
 const activeTab = ref('overview')
 const commandVisible = ref(false)
 const commandMode = ref('transition')
 const commandTarget = ref(null)
+const editVisible = ref(false)
+const editBusy = ref(false)
+const editError = ref(null)
+const editStale = ref(false)
+
+const workspaceBusy = computed(() => (
+  loading.value || scopeBusy.value || commandBusy.value || editBusy.value
+))
+const workspaceBlocked = computed(() => (
+  workspaceBusy.value || editVisible.value || commandVisible.value
+))
 
 const versionId = computed(() => route.params.id)
 const allowedActions = computed(() => version.value?.allowed_actions ?? [])
@@ -69,6 +84,10 @@ const transitionTargets = computed(() => {
 })
 const isReadOnly = computed(() => ['RELEASED', 'ARCHIVED'].includes(
   version.value?.status_code,
+))
+const canEdit = computed(() => (
+  ['DRAFT', 'PLANNED', 'IN_DEVELOPMENT', 'IN_TESTING'].includes(version.value?.status_code)
+  && allowedActions.value.includes('edit')
 ))
 const canTransition = computed(() => (
   allowedActions.value.includes('transition')
@@ -137,6 +156,7 @@ async function loadWorkspace() {
   try {
     const detailResponse = await getProjectVersion(versionId.value)
     version.value = detailResponse?.data?.data ?? null
+    editStale.value = false
     gateResult.value = version.value?.gate_result ?? null
     historyItems.value = version.value?.history ?? []
 
@@ -161,13 +181,68 @@ async function loadWorkspace() {
   }
 }
 
+async function refreshWorkspace() {
+  if (workspaceBlocked.value) return
+  await loadWorkspace()
+}
+
+function openEdit() {
+  if (!canEdit.value || workspaceBlocked.value) return
+  if (!editStale.value) editError.value = null
+  editVisible.value = true
+}
+
+async function handleEdit(payload) {
+  if (!editVisible.value || !canEdit.value || workspaceBusy.value || commandVisible.value || editStale.value) return
+  editBusy.value = true
+  editError.value = null
+
+  try {
+    await updateProjectVersion(versionId.value, payload)
+    editVisible.value = false
+    ElMessage.success('版本信息已更新')
+    await loadWorkspace()
+  } catch (requestError) {
+    editError.value = mapApiError(requestError)
+    editStale.value = editError.value.requiresReload || editError.value.status === 409
+  } finally {
+    editBusy.value = false
+  }
+}
+
+async function reloadEditVersion() {
+  if (!editVisible.value || workspaceBusy.value || commandVisible.value || !editStale.value) return
+  editBusy.value = true
+
+  try {
+    const response = await getProjectVersion(versionId.value)
+    const latest = response?.data?.data
+    if (!latest) throw new Error('无法读取最新版本，请重试')
+    version.value = latest
+    gateResult.value = latest.gate_result ?? null
+    historyItems.value = latest.history ?? []
+    editStale.value = false
+    editError.value = null
+  } catch (requestError) {
+    // A failed reload must not discard the draft or unlock another stale save.
+    editError.value = mapApiError(requestError)
+  } finally {
+    editBusy.value = false
+  }
+}
+
 function openTransition(target) {
+  if (workspaceBlocked.value || !canTransition.value
+    || !transitionTargets.value.some((status) => status.code === target?.code)) return
+
   commandMode.value = 'transition'
   commandTarget.value = target
   commandVisible.value = true
 }
 
 function openRelease(force = false) {
+  if (workspaceBlocked.value || !(force ? canForceRelease.value : canRelease.value)) return
+
   commandMode.value = force ? 'force' : 'release'
   commandTarget.value = null
   commandVisible.value = true
@@ -183,6 +258,10 @@ async function refreshGate() {
 }
 
 async function handleCommand(payload) {
+  if (!commandVisible.value || workspaceBusy.value || editVisible.value) return
+  if (commandMode.value === 'transition' && !canTransition.value) return
+  if (commandMode.value === 'release' && !canRelease.value) return
+  if (commandMode.value === 'force' && !canForceRelease.value) return
   commandBusy.value = true
 
   try {
@@ -224,6 +303,10 @@ async function handleCommand(payload) {
   }
 }
 
+function handleScopeBusy(busy) {
+  scopeBusy.value = busy
+}
+
 async function handleScopeChanged() {
   await loadWorkspace()
 }
@@ -257,7 +340,7 @@ onMounted(loadWorkspace)
       :empty="!loading && !error && !version"
       empty-title="版本不存在"
       empty-description="无法读取该项目版本"
-      @retry="loadWorkspace"
+      @retry="refreshWorkspace"
     >
       <template v-if="version">
         <header class="detail-heading">
@@ -279,13 +362,24 @@ onMounted(loadWorkspace)
             <el-button
               :icon="Refresh"
               aria-label="刷新版本数据"
-              @click="loadWorkspace"
+              :disabled="workspaceBlocked"
+              @click="refreshWorkspace"
             />
+            <el-button
+              v-if="canEdit"
+              data-testid="edit-version-command"
+              :icon="Edit"
+              :disabled="workspaceBlocked"
+              @click="openEdit"
+            >
+              编辑版本信息
+            </el-button>
             <el-button
               v-for="target in canTransition ? transitionTargets : []"
               :key="target.code"
               data-testid="transition-command"
               :icon="VideoPlay"
+              :disabled="workspaceBlocked"
               @click="openTransition(target)"
             >
               {{ target.value < version.status ? `回退至${target.label}` : `推进至${target.label}` }}
@@ -295,6 +389,7 @@ onMounted(loadWorkspace)
               data-testid="release-command"
               type="primary"
               :icon="UploadFilled"
+              :disabled="workspaceBlocked"
               @click="openRelease(false)"
             >
               正式发布
@@ -304,6 +399,7 @@ onMounted(loadWorkspace)
               data-testid="force-release-command"
               type="danger"
               :icon="WarningFilled"
+              :disabled="workspaceBlocked"
               @click="openRelease(true)"
             >
               强制发布
@@ -364,6 +460,8 @@ onMounted(loadWorkspace)
             <section class="detail-band">
               <RequirementPlanner
                 :version="version"
+                :disabled="workspaceBlocked"
+                @busy="handleScopeBusy"
                 @changed="handleScopeChanged"
                 @stale="handleScopeStale"
               />
@@ -394,6 +492,18 @@ onMounted(loadWorkspace)
         </el-tabs>
       </template>
     </AsyncState>
+
+    <VersionEditDialog
+      v-if="version && editVisible"
+      v-model="editVisible"
+      :version="version"
+      :editable="canEdit"
+      :busy="editBusy"
+      :error="editError"
+      :stale="editStale"
+      @confirm="handleEdit"
+      @reload="reloadEditVersion"
+    />
 
     <ReleaseDialog
       v-if="version"

@@ -13,6 +13,7 @@ import { listTasks } from '@/api/task'
 import { listDefects } from '@/api/defect'
 import AsyncState from '@/components/common/AsyncState.vue'
 import ProjectDeliveryTable from '@/components/requirements/ProjectDeliveryTable.vue'
+import ExecutionOwnerEditor from '@/components/requirements/ExecutionOwnerEditor.vue'
 import { mapApiError } from '@/composables/useApiError'
 
 const route = useRoute()
@@ -241,8 +242,12 @@ onMounted(loadDetail)
             <el-descriptions-item label="审核人">
               {{ requirement.reviewer?.display_name || '-' }}
             </el-descriptions-item>
-            <el-descriptions-item label="开发负责人">
-              {{ requirement.dev_lead?.display_name || '-' }}
+            <el-descriptions-item label="执行负责人">
+              <ExecutionOwnerEditor
+                :requirement="requirement"
+                @updated="loadDetail"
+                @stale="loadDetail"
+              />
             </el-descriptions-item>
             <el-descriptions-item label="需求描述" :span="3">
               <span class="long-copy">{{ requirement.description || '暂无描述' }}</span>

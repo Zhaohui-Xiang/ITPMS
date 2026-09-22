@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\InAppNotificationController;
 use App\Http\Controllers\Api\OrganizationController;
 use App\Http\Controllers\Api\ProjectController;
+use App\Http\Controllers\Api\ProjectMemberController;
 use App\Http\Controllers\Api\ProjectWorkOptionsController;
 use App\Http\Controllers\Api\ProjectVersionController;
 use App\Http\Controllers\Api\RequirementController;
@@ -54,6 +55,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/', [ProjectController::class, 'store']);
         Route::get('/{projectId}/versions', [ProjectVersionController::class, 'index'])->whereNumber('projectId');
         Route::post('/{projectId}/versions', [ProjectVersionController::class, 'store'])->whereNumber('projectId');
+        Route::get('/{id}/members', [ProjectMemberController::class, 'index'])->whereNumber('id');
+        Route::get('/{id}/member-options', [ProjectMemberController::class, 'options'])->whereNumber('id');
+        Route::post('/{id}/members', [ProjectMemberController::class, 'store'])->whereNumber('id');
+        Route::delete('/{id}/members/{userId}', [ProjectMemberController::class, 'destroy'])->whereNumber(['id', 'userId']);
         Route::get('/{id}/assignee-options', [ProjectWorkOptionsController::class, 'index'])->whereNumber('id');
         Route::get('/{id}', [ProjectController::class, 'show'])->whereNumber('id');
         Route::put('/{id}', [ProjectController::class, 'update'])->whereNumber('id');
@@ -97,6 +102,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/{id}/review', [RequirementController::class, 'review'])->whereNumber('id');
         Route::post('/{id}/resubmit', [RequirementController::class, 'resubmit'])->whereNumber('id');
         Route::post('/{id}/status', [RequirementController::class, 'transition'])->whereNumber('id');
+        Route::get('/{id}/execution-owner-options', [RequirementController::class, 'executionOwnerOptions'])->whereNumber('id');
         Route::get('/{id}/versions', [RequirementController::class, 'versions'])->whereNumber('id');
         Route::get('/{id}/versions/{vid}', [RequirementController::class, 'versionDetail'])->whereNumber(['id', 'vid']);
         Route::post('/{id}/tasks', [RequirementController::class, 'storeTask'])->whereNumber('id');

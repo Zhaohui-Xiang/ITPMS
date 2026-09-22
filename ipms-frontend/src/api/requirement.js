@@ -33,6 +33,10 @@ export function createRequirement(data) {
  * @param {Number|String} id
  * @param {Object} data
  */
+export function listExecutionOwnerOptions(id) {
+  return request.get(`/requirements/${id}/execution-owner-options`)
+}
+
 export function updateRequirement(id, data) {
   return request.put(`/requirements/${id}`, data)
 }

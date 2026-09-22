@@ -13,7 +13,8 @@ class UpdateRequirementRequest extends FormRequest
         $requirement = Requirement::query()->find($this->route('id'));
 
         return $requirement !== null
-            && Gate::forUser($this->user())->allows('update', $requirement);
+            && Gate::forUser($this->user())->allows('update', $requirement)
+            && (! $this->exists('dev_lead_id') || Gate::forUser($this->user())->allows('assign', $requirement));
     }
 
     public function rules(): array
@@ -27,6 +28,7 @@ class UpdateRequirementRequest extends FormRequest
             'project_ids' => ['sometimes', 'array', 'min:1'],
             'project_ids.*' => ['integer', 'distinct', 'exists:projects,id'],
             'dev_lead_id' => ['nullable', 'integer', 'exists:users,id'],
+            'version' => ['sometimes', 'integer:strict', 'min:1'],
         ];
     }
 

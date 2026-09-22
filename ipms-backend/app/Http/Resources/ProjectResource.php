@@ -55,6 +55,9 @@ final class ProjectResource extends JsonResource
         }
 
         $actions = [];
+        if (Gate::forUser($user)->allows('manageMembers', $this->resource)) {
+            $actions[] = 'manage_members';
+        }
         if (Gate::forUser($user)->allows('update', $this->resource)) {
             $actions[] = 'edit';
         }
