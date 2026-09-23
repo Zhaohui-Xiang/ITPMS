@@ -102,7 +102,9 @@ const project = (allowedActions = ['archive', 'delete']) => ({
   id: 17,
   name: '真实项目',
   system_type: 1,
-  status_label: '进行中',
+  status: 1,
+  status_code: 'ACTIVE',
+  status_label: '活跃',
   manager: { display_name: '项目经理' },
   supplier_org: { name: '供应商组织' },
   counts: { requirements: 3, tasks: 4, defects: 1, versions: 2 },
@@ -187,6 +189,36 @@ describe('ProjectList real data workflow', () => {
     expect(wrapper.text()).toContain('真实项目')
     expect(wrapper.text()).toContain('项目经理')
     expect(wrapper.text()).not.toContain('SAP B1')
+  })
+
+  it('renders the status column as a colored badge keyed by status_code', async () => {
+    listProjects.mockResolvedValue(response([
+      project(),
+      { ...project(), id: 18, name: '归档项目', status: 3, status_code: 'ARCHIVED', status_label: '归档' },
+    ]))
+    const wrapper = mountList()
+    await flushPromises()
+
+    const badges = wrapper.findAll('.project-status')
+    expect(badges.length).toBe(2)
+    expect(badges[0].attributes('data-status-code')).toBe('ACTIVE')
+    expect(badges[0].classes()).toContain('project-status--active')
+    expect(badges[0].text()).toContain('活跃')
+    expect(badges[1].attributes('data-status-code')).toBe('ARCHIVED')
+    expect(badges[1].classes()).toContain('project-status--archived')
+    expect(badges[1].text()).toContain('归档')
+  })
+
+  it('falls back to a neutral badge for unknown status codes', async () => {
+    listProjects.mockResolvedValue(response([
+      { ...project(), status: 9, status_code: 'SOMETHING_NEW', status_label: '未知状态' },
+    ]))
+    const wrapper = mountList()
+    await flushPromises()
+
+    const badge = wrapper.get('.project-status')
+    expect(badge.classes()).toContain('project-status--unknown')
+    expect(badge.text()).toContain('未知状态')
   })
 
   it('uses allowed_actions for real archive and delete commands', async () => {

@@ -294,6 +294,33 @@ describe('core work queues', () => {
     expect(mocks.listTasks).toHaveBeenLastCalledWith({ page: 2, page_size: 20 })
   })
 
+  it('only offers requirements with create_task in the create dialog and explains the empty state', async () => {
+    const selectStubs = {
+      ...stubs,
+      ElSelect: { template: '<div class="el-select-stub"><slot /><slot name="empty" /></div>' },
+      ElOption: { props: ['value', 'label'], template: '<li class="el-option-stub" :data-value="value">{{ label }}</li>' },
+    }
+    mocks.listRequirements.mockResolvedValue(page([
+      requirement(['create_task']),
+      { ...requirement([]), id: 42, title: '无权限需求' },
+    ]))
+
+    const wrapper = mount(TaskList, { global: { stubs: selectStubs } })
+    await flushPromises()
+    const values = wrapper.findAll('.el-option-stub')
+      .map((option) => option.attributes('data-value'))
+    expect(values).toContain('41')
+    expect(values).not.toContain('42')
+
+    mocks.listRequirements.mockResolvedValue(page([requirement([])]))
+    const emptyWrapper = mount(TaskList, { global: { stubs: selectStubs } })
+    await flushPromises()
+    const emptyValues = emptyWrapper.findAll('.el-option-stub')
+      .map((option) => option.attributes('data-value'))
+    expect(emptyValues).not.toContain('41')
+    expect(emptyWrapper.text()).toContain('暂无可拆分任务的需求')
+  })
+
   it('verifies and reopens defects through named confirmation flows then reloads', async () => {
     mocks.listDefects.mockResolvedValue(page([
       defect(61, '权限校验失败', ['verify']),

@@ -82,7 +82,12 @@ async function loadDetail() {
     tasks.value = []
     defects.value = []
     revisions.value = []
-    error.value = mapApiError(requestError)
+    const mapped = mapApiError(requestError)
+    // 后端 404 默认返回英文原文，详情页统一中文化，不暴露内部信息
+    if (mapped.status === 404) {
+      mapped.message = '需求不存在或已被删除'
+    }
+    error.value = mapped
   } finally {
     loading.value = false
   }

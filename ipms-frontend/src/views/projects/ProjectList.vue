@@ -8,6 +8,7 @@ import { listUsers } from '@/api/user'
 import { getOrgTree } from '@/api/organization'
 import { allPages } from '@/api/allPages'
 import AsyncState from '@/components/common/AsyncState.vue'
+import ProjectStatusTag from '@/components/projects/ProjectStatusTag.vue'
 import { mapApiError } from '@/composables/useApiError'
 import { usePagination } from '@/composables/usePagination'
 import { usePermission } from '@/composables/usePermission'
@@ -95,12 +96,6 @@ async function saveProject() {
   } catch (failure) {
     createError.value = mapApiError(failure).message
   } finally { creating.value = false }
-}
-
-const statusTypes = {
-  1: 'success',
-  2: 'warning',
-  3: 'info',
 }
 
 const systemTypeLabels = {
@@ -326,9 +321,10 @@ onMounted(fetchProjects)
                   </button>
                 </td>
                 <td>
-                  <el-tag :type="statusTypes[project.status]" size="small" effect="plain">
-                    {{ project.status_label || '-' }}
-                  </el-tag>
+                  <ProjectStatusTag
+                    :status-code="project.status_code"
+                    :status-label="project.status_label"
+                  />
                 </td>
                 <td>{{ systemTypeLabels[project.system_type] || '-' }}</td>
                 <td>{{ project.manager?.display_name || '未分配' }}</td>

@@ -383,6 +383,44 @@ final class DashboardContractTest extends TestCase
         );
     }
 
+    public function test_supplier_tester_pending_defects_include_defects_they_reported(): void
+    {
+        $fixture = $this->scopeFixture();
+        $tester = User::factory()->withRole('supplier_tester')->create();
+        $supplier = $fixture['supplier_dev']->organizations()->firstOrFail();
+        $tester->organizations()->attach($supplier, [
+            'role_in_org' => 'member',
+            'is_primary' => true,
+            'assigned_at' => now(),
+        ]);
+        // tester 是提交人但不是项目成员 —— 与线上 BUG-2 的场景一致
+        $reportedDefect = Defect::factory()->create([
+            'requirement_id' => $fixture['inside_defect']->requirement_id,
+            'project_id' => $fixture['inside_defect']->project_id,
+            'title' => 'Reporter-only retest defect',
+            'reporter_id' => $tester->id,
+            'created_by_id' => $tester->id,
+            'severity' => DefectSeverity::SERIOUS->value,
+            'status' => DefectStatus::PENDING_RETEST->value,
+        ]);
+
+        $response = $this->actingAs($tester)
+            ->getJson('/api/dashboard/summary')
+            ->assertOk();
+
+        $this->assertSame(
+            1,
+            collect($response->json('data.metrics'))
+                ->firstWhere('key', 'pending_defects')['value'],
+        );
+        $this->assertQueueContains(
+            $response,
+            'priority_queue',
+            'defect',
+            $reportedDefect->id,
+        );
+    }
+
     public function test_dashboard_targets_only_use_routes_supported_by_current_pages(): void
     {
         $fixture = $this->scopeFixture();

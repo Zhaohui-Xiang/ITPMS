@@ -130,11 +130,16 @@ class DashboardController extends Controller
         if ($role === 'supplier_tester') {
             $query
                 ->where('status', DefectStatus::PENDING_RETEST->value)
-                ->whereHas(
-                    'project.members',
-                    fn (Builder $memberQuery): Builder => $memberQuery
-                        ->where('user_id', $user->id),
-                );
+                // 口径与 DefectPolicy::verify 一致：提交人或项目成员中的测试角色可复测
+                ->where(function (Builder $retestScope) use ($user): void {
+                    $retestScope
+                        ->where('reporter_id', $user->id)
+                        ->orWhereHas(
+                            'project.members',
+                            fn (Builder $memberQuery): Builder => $memberQuery
+                                ->where('user_id', $user->id),
+                        );
+                });
         }
 
         return $query;

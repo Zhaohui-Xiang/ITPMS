@@ -85,6 +85,9 @@ const dialogTitle = computed(() => formMode.value === 'create' ? '新建任务' 
 const selectedRequirement = computed(() => (
   requirementOptions.value.find((item) => item.id === Number(form.requirement_id))
 ))
+const creatableRequirements = computed(() => (
+  requirementOptions.value.filter((item) => item.allowed_actions?.includes('create_task'))
+))
 const projectOptions = computed(() => (
   (selectedRequirement.value?.project_deliveries ?? [])
     .filter((delivery) => delivery.project && delivery.allowed_actions?.includes('create_task'))
@@ -523,15 +526,20 @@ onMounted(() => {
             <el-select
               v-model="form.requirement_id"
               filterable
-              placeholder="选择已审核需求"
+              placeholder="选择可拆分任务的需求"
               @change="handleRequirementChange"
             >
               <el-option
-                v-for="requirement in requirementOptions.filter((item) => item.allowed_actions?.includes('create_task'))"
+                v-for="requirement in creatableRequirements"
                 :key="requirement.id"
                 :label="requirement.title"
                 :value="requirement.id"
               />
+              <template #empty>
+                <div class="select-empty-hint">
+                  暂无可拆分任务的需求：需求需审核通过且您具备其项目范围的操作权限
+                </div>
+              </template>
             </el-select>
           </el-form-item>
           <el-form-item label="所属项目" required>
@@ -707,5 +715,12 @@ onMounted(() => {
   .form-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.select-empty-hint {
+  padding: 12px 16px;
+  color: $color-muted;
+  font-size: $font-size-caption;
+  line-height: 1.6;
 }
 </style>

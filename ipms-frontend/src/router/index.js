@@ -52,7 +52,7 @@ const routes = [
         meta: { title: '需求管理', icon: 'Document' },
       },
       {
-        path: 'requirements/:id',
+        path: 'requirements/:id(\\d+)',
         name: 'RequirementDetail',
         component: () => import('@/views/requirements/RequirementDetail.vue'),
         meta: { title: '需求详情' },

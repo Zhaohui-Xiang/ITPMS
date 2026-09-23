@@ -108,9 +108,13 @@ class DefectPolicy
             || (
                 $this->hasRole($user, 'supplier_tester')
                 && $user->hasPermission('defect.retest')
-                && $defect->project->members()
-                    ->where('user_id', $user->id)
-                    ->exists()
+                && (
+                    // 缺陷提交人（通常是登记缺陷的测试）可直接复测
+                    $defect->reporter_id === $user->id
+                    || $defect->project->members()
+                        ->where('user_id', $user->id)
+                        ->exists()
+                )
                 && $this->view($user, $defect)
             );
     }

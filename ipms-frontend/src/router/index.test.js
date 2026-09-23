@@ -40,6 +40,11 @@ describe('operations shell routes', () => {
     expect(typeof versions.component).toBe('function')
   })
 
+  it('only matches numeric requirement ids so /requirements/create falls through to 404', () => {
+    expect(router.resolve('/requirements/42').name).toBe('RequirementDetail')
+    expect(router.resolve('/requirements/create').name).toBe('NotFound')
+  })
+
   it('serves the project version release workspace inside the operations shell', () => {
     const shell = router.options.routes.find((route) => route.name === 'OperationsShell')
     const detail = shell.children.find((route) => route.name === 'ProjectVersionDetail')

@@ -47,6 +47,21 @@ beforeEach(() => {
   api.listDefects.mockResolvedValue(response({ items: [] }))
 })
 
+describe('requirement detail error handling', () => {
+  it('shows a localized message instead of the raw backend text on 404', async () => {
+    api.getRequirement.mockRejectedValueOnce({
+      response: {
+        status: 404,
+        data: { message: 'The route api/requirements/create could not be found.' },
+      },
+    })
+    const wrapper = render()
+    await flushPromises()
+    expect(wrapper.text()).toContain('需求不存在或已被删除')
+    expect(wrapper.text()).not.toContain('could not be found')
+  })
+})
+
 describe('requirement execution owner integration', () => {
   it.each(['updated', 'stale'])('reloads persisted owner and revision data after %s', async event => {
     const wrapper = render()
