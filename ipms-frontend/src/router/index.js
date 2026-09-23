@@ -64,10 +64,22 @@ const routes = [
         meta: { title: '任务管理', icon: 'List' },
       },
       {
+        path: 'tasks/:id(\\d+)',
+        name: 'TaskDetail',
+        component: () => import('@/views/tasks/TaskDetail.vue'),
+        meta: { title: '任务详情' },
+      },
+      {
         path: 'defects',
         name: 'DefectList',
         component: () => import('@/views/defects/DefectList.vue'),
         meta: { title: '缺陷管理', icon: 'Warning' },
+      },
+      {
+        path: 'defects/:id(\\d+)',
+        name: 'DefectDetail',
+        component: () => import('@/views/defects/DefectDetail.vue'),
+        meta: { title: '缺陷详情' },
       },
       {
         path: 'documents',

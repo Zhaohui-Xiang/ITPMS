@@ -81,3 +81,34 @@ export function verifyDefect(id, data) {
 export function reopenDefect(id, data) {
   return request.post(`/defects/${id}/reopen`, data)
 }
+
+/**
+ * 上传缺陷附件
+ * @param {Number|String} defectId
+ * @param {File} file
+ */
+export function uploadDefectAttachment(defectId, file) {
+  const form = new FormData()
+  form.append('file', file)
+  return request.post(`/defects/${defectId}/attachments`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
+/**
+ * 下载缺陷附件
+ * @param {Number|String} id
+ */
+export function downloadDefectAttachment(id) {
+  return request.get(`/defect-attachments/${id}/download`, {
+    responseType: 'blob',
+  })
+}
+
+/**
+ * 删除缺陷附件
+ * @param {Number|String} id
+ */
+export function deleteDefectAttachment(id) {
+  return request.delete(`/defect-attachments/${id}`)
+}

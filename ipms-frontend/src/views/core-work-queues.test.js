@@ -113,6 +113,7 @@ const passthrough = (name) => defineComponent({
 
 const stubs = {
   ElButton,
+  RouterLink: { props: ['to'], template: '<a :href="to"><slot /></a>' },
   ElDialog: passthrough('ElDialog'),
   ElForm: passthrough('ElForm'),
   ElFormItem: passthrough('ElFormItem'),

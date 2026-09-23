@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { Check, Refresh } from '@element-plus/icons-vue'
 import { getProject } from '@/api/project'
 import { mapApiError } from '@/composables/useApiError'
@@ -11,6 +11,8 @@ const props = defineProps({
   busy: Boolean,
   stale: Boolean,
   error: { type: Object, default: null },
+  // 从门禁阻断引导进入时聚焦的字段（owner / planned_release_date / release_notes 等）
+  focusField: { type: String, default: '' },
 })
 const emit = defineEmits(['update:modelValue', 'confirm', 'reload'])
 const form = reactive({})
@@ -46,6 +48,17 @@ watch(() => props.version, async (version, _previous, onCleanup) => {
     if (!cancelled) ownerError.value = mapApiError(error).message
   } finally {
     if (!cancelled) ownerLoading.value = false
+  }
+  if (!cancelled && props.focusField) {
+    await nextTick()
+    const marker = document.querySelector(`[data-testid="edit-${props.focusField}"]`)
+    const target = marker?.matches('input, textarea')
+      ? marker
+      : marker?.querySelector('input, textarea')
+    target?.focus()
+    if (typeof target?.scrollIntoView === 'function') {
+      target.scrollIntoView({ block: 'center' })
+    }
   }
 }, { immediate: true })
 

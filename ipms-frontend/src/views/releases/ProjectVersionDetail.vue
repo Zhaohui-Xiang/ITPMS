@@ -66,6 +66,7 @@ const commandMode = ref('transition')
 const commandTarget = ref(null)
 const editVisible = ref(false)
 const editBusy = ref(false)
+const editFocusField = ref('')
 const editError = ref(null)
 const editStale = ref(false)
 
@@ -190,6 +191,12 @@ function openEdit() {
   if (!canEdit.value || workspaceBlocked.value) return
   if (!editStale.value) editError.value = null
   editVisible.value = true
+}
+
+// 门禁阻断引导：打开编辑弹窗并聚焦对应字段
+function handleGateResolve({ field }) {
+  editFocusField.value = field ?? ''
+  openEdit()
 }
 
 async function handleEdit(payload) {
@@ -474,6 +481,7 @@ onMounted(loadWorkspace)
                 :result="currentGateResult"
                 :project-id="version.project?.id"
                 :version-id="version.id"
+                @resolve="handleGateResolve"
               />
             </section>
           </el-tab-pane>
@@ -501,6 +509,7 @@ onMounted(loadWorkspace)
       :busy="editBusy"
       :error="editError"
       :stale="editStale"
+      :focus-field="editFocusField"
       @confirm="handleEdit"
       @reload="reloadEditVersion"
     />

@@ -14,6 +14,7 @@ import { listDefects } from '@/api/defect'
 import AsyncState from '@/components/common/AsyncState.vue'
 import ProjectDeliveryTable from '@/components/requirements/ProjectDeliveryTable.vue'
 import ExecutionOwnerEditor from '@/components/requirements/ExecutionOwnerEditor.vue'
+import TaskFormDialog from '@/components/tasks/TaskFormDialog.vue'
 import { mapApiError } from '@/composables/useApiError'
 
 const route = useRoute()
@@ -40,6 +41,8 @@ const reviewBusy = ref(false)
 const requirementId = computed(() => route.params.id)
 const allowedActions = computed(() => requirement.value?.allowed_actions ?? [])
 const canReview = computed(() => allowedActions.value.includes('review'))
+const canCreateTask = computed(() => allowedActions.value.includes('create_task'))
+const taskDialogVisible = ref(false)
 const reviewTitle = computed(() => (
   reviewAction.value === 'approve' ? '审核通过需求' : '驳回需求'
 ))
@@ -275,6 +278,15 @@ onMounted(loadDetail)
           <div class="band-heading">
             <h2 id="requirement-tasks-title">关联任务</h2>
             <span>{{ tasks.length }} 项</span>
+            <el-button
+              v-if="canCreateTask"
+              type="primary"
+              size="small"
+              data-testid="create-task-from-requirement"
+              @click="taskDialogVisible = true"
+            >
+              新建任务
+            </el-button>
           </div>
           <div v-if="tasks.length === 0" class="section-empty">暂无关联任务</div>
           <div v-else class="data-table-scroll">
@@ -403,6 +415,16 @@ onMounted(loadDetail)
         </el-button>
       </template>
     </el-dialog>
+
+    <TaskFormDialog
+      v-if="requirement"
+      v-model="taskDialogVisible"
+      mode="create"
+      :requirements="[requirement]"
+      :lock-requirement="true"
+      :initial-requirement-id="requirement.id"
+      @saved="loadDetail"
+    />
   </div>
 </template>
 

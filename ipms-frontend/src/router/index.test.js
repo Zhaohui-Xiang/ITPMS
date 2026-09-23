@@ -45,6 +45,16 @@ describe('operations shell routes', () => {
     expect(router.resolve('/requirements/create').name).toBe('NotFound')
   })
 
+  it('serves task detail only for numeric ids', () => {
+    expect(router.resolve('/tasks/5').name).toBe('TaskDetail')
+    expect(router.resolve('/tasks/create').name).toBe('NotFound')
+  })
+
+  it('serves defect detail only for numeric ids', () => {
+    expect(router.resolve('/defects/7').name).toBe('DefectDetail')
+    expect(router.resolve('/defects/create').name).toBe('NotFound')
+  })
+
   it('serves the project version release workspace inside the operations shell', () => {
     const shell = router.options.routes.find((route) => route.name === 'OperationsShell')
     const detail = shell.children.find((route) => route.name === 'ProjectVersionDetail')

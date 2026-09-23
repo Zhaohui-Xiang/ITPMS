@@ -62,6 +62,21 @@ describe('requirement detail error handling', () => {
   })
 })
 
+describe('requirement detail split-task entry', () => {
+  it('shows the create-task entry when the requirement allows create_task', async () => {
+    api.getRequirement.mockResolvedValue(response({ ...requirement, allowed_actions: ['create_task'] }))
+    const wrapper = render()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="create-task-from-requirement"]').exists()).toBe(true)
+  })
+
+  it('hides the create-task entry without the create_task action', async () => {
+    const wrapper = render()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="create-task-from-requirement"]').exists()).toBe(false)
+  })
+})
+
 describe('requirement execution owner integration', () => {
   it.each(['updated', 'stale'])('reloads persisted owner and revision data after %s', async event => {
     const wrapper = render()

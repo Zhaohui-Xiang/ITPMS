@@ -354,3 +354,58 @@ describe('pre-release version metadata editing', () => {
     expect(wrapper.find('[role="alert"]').exists()).toBe(true)
   })
 })
+
+describe('gate blocker resolution guidance', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    const blockedGate = {
+      passed: false,
+      target_status_code: 'READY_TO_RELEASE',
+      checks: [{
+        code: 'release_notes_present',
+        label: 'Release notes are present',
+        passed: false,
+        blocking: true,
+        details: { applicable: true, present: false },
+      }],
+      blocking: [],
+    }
+    api.getProjectVersion.mockResolvedValue(response(version({ gate_result: blockedGate })))
+    api.checkProjectVersionGate.mockResolvedValue(response(blockedGate))
+    api.getProject.mockResolvedValue(response({ id: 9, manager: { id: 7, display_name: 'IT PM' } }))
+    api.updateProjectVersion.mockResolvedValue(response(version({ lock_version: 4 })))
+    api.listProjectVersionHistory.mockResolvedValue(response({ items: [], total_pages: 1 }))
+  })
+  afterEach(() => wrappers.splice(0).forEach((wrapper) => wrapper.unmount()))
+
+  it('opens the editor focused on the missing field from a gate blocker', async () => {
+    const wrapper = mount(ProjectVersionDetail, {
+      attachTo: document.body,
+      global: {
+        plugins: [ElementPlus],
+        stubs: {
+          AsyncState: { template: '<div><slot /></div>' },
+          VersionProgress: true, VersionStatusTag: true,
+          RequirementPlanner: true, VersionHistory: true, ReleaseDialog: true,
+          ElDialog: {
+            props: ['modelValue'],
+            template: '<section v-if="modelValue" role="dialog"><slot /><slot name="footer" /></section>',
+          },
+          ElTabs: { template: '<div><slot /></div>' },
+          ElTabPane: { template: '<div><slot /></div>' },
+          ElDescriptions: { template: '<div><slot /></div>' },
+          ElDescriptionsItem: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+    wrappers.push(wrapper)
+    await flushPromises()
+
+    await wrapper.get('[data-testid="gate-resolve-release_notes_present"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true)
+    const notes = field(wrapper, 'release_notes')
+    expect(document.activeElement).toBe(notes.element)
+  })
+})

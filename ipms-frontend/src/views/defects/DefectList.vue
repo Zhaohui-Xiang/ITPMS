@@ -440,7 +440,9 @@ onMounted(() => {
           <tbody>
             <tr v-for="defect in rows" :key="defect.id">
               <td>
-                <span class="record-title">{{ defect.title }}</span>
+                <router-link class="record-title record-link" :to="`/defects/${defect.id}`">
+                  {{ defect.title }}
+                </router-link>
                 <span class="record-meta">BUG-{{ defect.id }} · {{ defect.reporter?.display_name || '-' }}</span>
               </td>
               <td class="wrap-cell">
@@ -666,6 +668,15 @@ onMounted(() => {
 .record-title {
   display: block;
   font-weight: 600;
+}
+
+.record-link {
+  color: $color-primary;
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
 }
 
 .record-meta {

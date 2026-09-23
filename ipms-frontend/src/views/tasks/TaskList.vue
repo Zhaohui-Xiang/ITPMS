@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -13,16 +13,14 @@ import {
 import { listRequirements } from '@/api/requirement'
 import {
   claimTask,
-  createTask,
   holdTask,
   listTasks,
   transitionTask,
-  updateTask,
 } from '@/api/task'
 import { allPages } from '@/api/allPages'
 import FilterBar from '@/components/common/FilterBar.vue'
 import AssignmentDialog from '@/components/common/AssignmentDialog.vue'
-import UserSelector from '@/components/common/UserSelector.vue'
+import TaskFormDialog from '@/components/tasks/TaskFormDialog.vue'
 const assignmentRecord = ref(null)
 import PaginatedTable from '@/components/common/PaginatedTable.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
@@ -64,35 +62,9 @@ const assigneeId = ref(route.query.assignee_id ? Number(route.query.assignee_id)
 const loading = ref(false)
 const error = ref(null)
 const busyId = ref(null)
-const dialogVisible = ref(false)
+const taskDialogVisible = ref(false)
 const formMode = ref('create')
-const saving = ref(false)
-const form = reactive({
-  id: null,
-  requirement_id: '',
-  project_id: '',
-  title: '',
-  description: '',
-  assignee_id: null,
-  priority: 3,
-  due_date: '',
-  remind_days_before: null,
-  estimated_hours: null,
-  actual_hours: null,
-})
-
-const dialogTitle = computed(() => formMode.value === 'create' ? '新建任务' : '编辑任务')
-const selectedRequirement = computed(() => (
-  requirementOptions.value.find((item) => item.id === Number(form.requirement_id))
-))
-const creatableRequirements = computed(() => (
-  requirementOptions.value.filter((item) => item.allowed_actions?.includes('create_task'))
-))
-const projectOptions = computed(() => (
-  (selectedRequirement.value?.project_deliveries ?? [])
-    .filter((delivery) => delivery.project && delivery.allowed_actions?.includes('create_task'))
-    .map((delivery) => delivery.project)
-))
+const editingTask = ref(null)
 const visibleProjects = computed(() => {
   const byId = new Map()
   tasks.value.forEach((task) => {
@@ -191,98 +163,18 @@ async function handlePageSizeChange(nextPageSize) {
   await fetchTasks()
 }
 
-function resetForm() {
-  Object.assign(form, {
-    id: null,
-    requirement_id: '',
-    project_id: '',
-    title: '',
-    description: '',
-    assignee_id: null,
-    priority: 3,
-    due_date: '',
-    remind_days_before: null,
-    estimated_hours: null,
-    actual_hours: null,
-  })
-}
-
 async function openCreate() {
-  resetForm()
   formMode.value = 'create'
-  dialogVisible.value = true
+  editingTask.value = null
+  taskDialogVisible.value = true
   if (requirementOptions.value.length === 0) await loadRequirements()
 }
 
 async function openEdit(task) {
-  resetForm()
   formMode.value = 'edit'
-  Object.assign(form, {
-    id: task.id,
-    requirement_id: task.requirement?.id ?? '',
-    project_id: task.project?.id ?? '',
-    title: task.title,
-    description: task.description ?? '',
-    assignee_id: task.assignee?.id ?? null,
-    priority: task.priority,
-    due_date: task.due_date ?? '',
-    remind_days_before: task.remind_days_before,
-    estimated_hours: task.estimated_hours,
-    actual_hours: task.actual_hours,
-  })
-  dialogVisible.value = true
+  editingTask.value = task
+  taskDialogVisible.value = true
   if (requirementOptions.value.length === 0) await loadRequirements()
-}
-
-function handleRequirementChange() {
-  form.project_id = projectOptions.value.length === 1 ? projectOptions.value[0].id : ''
-}
-
-function formPayload() {
-  const payload = {
-    title: form.title.trim(),
-    description: form.description.trim() || null,
-    ...(formMode.value === 'create' ? {
-      assignee_id: form.assignee_id ? Number(form.assignee_id) : null,
-    } : {}),
-    priority: Number(form.priority),
-    due_date: form.due_date,
-    remind_days_before: form.remind_days_before,
-    estimated_hours: form.estimated_hours,
-  }
-  if (formMode.value === 'create') {
-    payload.requirement_id = Number(form.requirement_id)
-    payload.project_id = Number(form.project_id)
-  } else {
-    payload.actual_hours = form.actual_hours
-  }
-  return payload
-}
-
-async function saveTask() {
-  const payload = formPayload()
-  if (!payload.title || !payload.due_date
-    || (formMode.value === 'create' && (!payload.requirement_id || !payload.project_id))) {
-    ElMessage.error('请填写标题、所属需求、所属项目和截止日期')
-    return
-  }
-
-  saving.value = true
-  try {
-    if (formMode.value === 'create') {
-      await createTask(payload)
-      ElMessage.success(`任务「${payload.title}」已创建`)
-    } else {
-      await updateTask(form.id, payload)
-      ElMessage.success(`任务「${payload.title}」已更新`)
-    }
-    dialogVisible.value = false
-    await fetchTasks()
-  } catch (requestError) {
-    ElMessage.error(requestError?.response?.data?.message ?? '任务保存失败')
-  } finally {
-    saving.value = false
-  }
 }
 
 async function mutate(task, request, successMessage) {
@@ -435,7 +327,9 @@ onMounted(() => {
           <tbody>
             <tr v-for="task in rows" :key="task.id">
               <td>
-                <span class="record-title">{{ task.title }}</span>
+                <router-link class="record-title record-link" :to="`/tasks/${task.id}`">
+                  {{ task.title }}
+                </router-link>
                 <span class="record-meta">TASK-{{ task.id }}</span>
               </td>
               <td class="wrap-cell">
@@ -519,77 +413,13 @@ onMounted(() => {
     </PaginatedTable>
 
     <AssignmentDialog :record="assignmentRecord" work-type="task" @close="assignmentRecord = null" @assigned="fetchTasks" />
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="min(680px, 94vw)" destroy-on-close>
-      <el-form label-position="top">
-        <div v-if="formMode === 'create'" class="form-grid">
-          <el-form-item label="所属需求" required>
-            <el-select
-              v-model="form.requirement_id"
-              filterable
-              placeholder="选择可拆分任务的需求"
-              @change="handleRequirementChange"
-            >
-              <el-option
-                v-for="requirement in creatableRequirements"
-                :key="requirement.id"
-                :label="requirement.title"
-                :value="requirement.id"
-              />
-              <template #empty>
-                <div class="select-empty-hint">
-                  暂无可拆分任务的需求：需求需审核通过且您具备其项目范围的操作权限
-                </div>
-              </template>
-            </el-select>
-          </el-form-item>
-          <el-form-item label="所属项目" required>
-            <el-select v-model="form.project_id" filterable placeholder="选择关联项目">
-              <el-option
-                v-for="project in projectOptions"
-                :key="project.id"
-                :label="project.name"
-                :value="project.id"
-              />
-            </el-select>
-          </el-form-item>
-        </div>
-        <el-form-item label="任务标题" required>
-          <el-input v-model="form.title" maxlength="200" show-word-limit />
-        </el-form-item>
-        <el-form-item label="任务描述">
-          <el-input v-model="form.description" type="textarea" :rows="4" />
-        </el-form-item>
-        <div class="form-grid">
-          <el-form-item v-if="formMode === 'create'" label="负责人">
-            <UserSelector v-model="form.assignee_id" :project-id="form.project_id" />
-          </el-form-item>
-          <el-form-item label="优先级" required>
-            <el-select v-model="form.priority">
-              <el-option label="紧急" :value="1" />
-              <el-option label="高" :value="2" />
-              <el-option label="中" :value="3" />
-              <el-option label="低" :value="4" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="截止日期" required>
-            <el-date-picker v-model="form.due_date" type="date" value-format="YYYY-MM-DD" />
-          </el-form-item>
-          <el-form-item label="提前提醒天数">
-            <el-input-number v-model="form.remind_days_before" :min="0" controls-position="right" />
-          </el-form-item>
-          <el-form-item label="预计工时">
-            <el-input-number v-model="form.estimated_hours" :min="0" :precision="1" controls-position="right" />
-          </el-form-item>
-          <el-form-item v-if="formMode === 'edit'" label="实际工时">
-            <el-input-number v-model="form.actual_hours" :min="0" :precision="1" controls-position="right" />
-          </el-form-item>
-        </div>
-      </el-form>
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveTask">保存</el-button>
-      </template>
-    </el-dialog>
+    <TaskFormDialog
+      v-model="taskDialogVisible"
+      :mode="formMode"
+      :task="editingTask"
+      :requirements="requirementOptions"
+      @saved="fetchTasks"
+    />
   </div>
 </template>
 
@@ -667,6 +497,15 @@ onMounted(() => {
   font-weight: 600;
 }
 
+.record-link {
+  color: $color-primary;
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
 .record-meta {
   display: block;
   margin-top: 4px;
@@ -715,12 +554,5 @@ onMounted(() => {
   .form-grid {
     grid-template-columns: 1fr;
   }
-}
-
-.select-empty-hint {
-  padding: 12px 16px;
-  color: $color-muted;
-  font-size: $font-size-caption;
-  line-height: 1.6;
 }
 </style>

@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { CircleCheck, CircleClose, Link as LinkIcon } from '@element-plus/icons-vue'
+import { CircleCheck, CircleClose, Link as LinkIcon, Right } from '@element-plus/icons-vue'
 
 const props = defineProps({
   result: {
@@ -16,6 +16,60 @@ const props = defineProps({
     default: null,
   },
 })
+
+const emit = defineEmits(['resolve'])
+
+// 门禁项中文化与解决引导：version-field=动作型（打开版本编辑弹窗聚焦字段），
+// records=记录型（列出具体记录并可跳转详情），link=仅提供列表入口
+const CHECK_META = {
+  version_metadata: {
+    label: '版本负责人与计划发布日期已设置',
+    kind: 'version-field',
+    resolveLabel: '前往补充',
+  },
+  release_notes_present: {
+    label: '发布说明已填写',
+    kind: 'version-field',
+    field: 'release_notes',
+    resolveLabel: '前往填写发布说明',
+  },
+  non_empty_scope: {
+    label: '版本范围非空',
+    kind: 'link',
+    target: '/requirements',
+  },
+  reviewed_assigned_scope: {
+    label: '范围内需求已审核且有执行负责人',
+    kind: 'link',
+    target: '/requirements',
+  },
+  project_delivery: {
+    label: '项目交付进度达到目标阶段',
+    kind: 'link',
+    target: '/requirements',
+  },
+  tasks_completed: {
+    label: '范围任务全部完成',
+    kind: 'records',
+    field: 'incomplete_task_ids',
+    path: '/tasks/',
+    recordLabel: '任务',
+    listTarget: '/tasks',
+  },
+  severe_defects_closed: {
+    label: '严重缺陷全部关闭',
+    kind: 'records',
+    field: 'open_defect_ids',
+    path: '/defects/',
+    recordLabel: '缺陷',
+    listTarget: '/defects',
+  },
+  acceptance_complete: {
+    label: '范围内需求全部验收完成',
+    kind: 'link',
+    target: '/requirements',
+  },
+}
 
 const visibleChecks = computed(() => {
   const checks = props.result?.checks ?? []
@@ -54,24 +108,44 @@ function checkCount(check) {
   ), 0)
 }
 
+function metaFor(check) {
+  return CHECK_META[check.code] ?? { label: check.label, kind: 'link', target: null }
+}
+
+function labelFor(check) {
+  return metaFor(check).label ?? check.label
+}
+
+function resolveFieldFor(check) {
+  if (check.code === 'version_metadata') {
+    const missing = check.details?.missing ?? []
+    return missing.includes('owner_id') ? 'owner' : 'planned_release_date'
+  }
+  return metaFor(check).field
+}
+
+function recordIdsFor(check) {
+  const field = metaFor(check).field
+  const ids = check.details?.[field]
+  return Array.isArray(ids) ? ids.slice(0, 8) : []
+}
+
+function totalRecordsFor(check) {
+  const field = metaFor(check).field
+  const ids = check.details?.[field]
+  return Array.isArray(ids) ? ids.length : 0
+}
+
 function targetFor(check) {
+  const meta = metaFor(check)
+  const base = meta.listTarget ?? meta.target
+  if (!base) return null
   const query = new URLSearchParams({
     project_id: String(props.projectId ?? ''),
     project_version_id: String(props.versionId ?? ''),
   }).toString()
 
-  if (check.code === 'tasks_completed') return `/tasks?${query}`
-  if (check.code === 'severe_defects_closed') return `/defects?${query}`
-  if ([
-    'non_empty_scope',
-    'reviewed_assigned_scope',
-    'project_delivery',
-    'acceptance_complete',
-  ].includes(check.code)) {
-    return `/requirements?${query}`
-  }
-
-  return null
+  return `${base}?${query}`
 }
 
 function stateLabel(check) {
@@ -113,15 +187,40 @@ function stateLabel(check) {
         />
         <div class="gate-item__content">
           <div class="gate-item__heading">
-            <strong>{{ check.label }}</strong>
+            <strong>{{ labelFor(check) }}</strong>
             <span>{{ stateLabel(check) }}</span>
           </div>
-          <p v-if="!check.passed">
-            影响记录 {{ checkCount(check) }} 项，请处理后重新检查。
-          </p>
+          <template v-if="!check.passed">
+            <p v-if="checkCount(check) > 0">
+              影响记录 {{ checkCount(check) }} 项，请处理后重新检查。
+            </p>
+            <ul
+              v-if="metaFor(check).kind === 'records' && recordIdsFor(check).length > 0"
+              class="gate-item__records"
+            >
+              <li v-for="id in recordIdsFor(check)" :key="id">
+                <a :href="`${metaFor(check).path}${id}`" :data-testid="`gate-record-${check.code}-${id}`">
+                  {{ metaFor(check).recordLabel }} #{{ id }}
+                </a>
+              </li>
+              <li v-if="totalRecordsFor(check) > recordIdsFor(check).length" class="gate-item__more">
+                其余 {{ totalRecordsFor(check) - recordIdsFor(check).length }} 项请从列表查看
+              </li>
+            </ul>
+          </template>
         </div>
+        <button
+          v-if="!check.passed && metaFor(check).kind === 'version-field'"
+          type="button"
+          class="gate-item__link gate-item__resolve"
+          :data-testid="`gate-resolve-${check.code}`"
+          @click="emit('resolve', { code: check.code, field: resolveFieldFor(check) })"
+        >
+          <Right aria-hidden="true" />
+          {{ metaFor(check).resolveLabel }}
+        </button>
         <a
-          v-if="targetFor(check)"
+          v-else-if="targetFor(check)"
           :href="targetFor(check)"
           :data-testid="`gate-link-${check.code}`"
           class="gate-item__link"
@@ -244,6 +343,38 @@ function stateLabel(check) {
     svg {
       width: 15px;
     }
+  }
+
+  &__resolve {
+    padding: 0;
+    background: none;
+    border: 0;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  &__records {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    margin: 8px 0 0;
+    padding: 0;
+    list-style: none;
+
+    a {
+      color: $color-primary;
+      font-size: $font-size-caption;
+      text-decoration: none;
+
+      &:hover {
+        text-decoration: underline;
+      }
+    }
+  }
+
+  &__more {
+    color: $color-muted;
+    font-size: $font-size-caption;
   }
 }
 
