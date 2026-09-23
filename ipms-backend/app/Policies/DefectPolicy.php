@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Enums\UserType;
 use App\Models\Defect;
+use App\Models\DefectAttachment;
 use App\Models\Project;
 use App\Models\Requirement;
 use App\Models\User;
@@ -122,6 +123,25 @@ class DefectPolicy
     public function reopen(User $user, Defect $defect): bool
     {
         return $this->verify($user, $defect);
+    }
+
+    public function uploadAttachment(User $user, Defect $defect): bool
+    {
+        return $this->view($user, $defect)
+            && (
+                $user->isSuperAdmin()
+                || $user->hasPermission('defect.edit')
+                || $defect->reporter_id === $user->id
+            );
+    }
+
+    public function deleteAttachment(User $user, Defect $defect, DefectAttachment $attachment): bool
+    {
+        return $user->isSuperAdmin()
+            || (
+                $attachment->uploaded_by_id === $user->id
+                && $this->view($user, $defect)
+            );
     }
 
     private function hasRole(User $user, string $role): bool

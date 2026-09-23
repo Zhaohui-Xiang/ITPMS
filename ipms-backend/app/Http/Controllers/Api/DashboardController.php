@@ -59,8 +59,7 @@ class DashboardController extends Controller
             $user,
         );
 
-        $pendingReviews = (clone $requirements)
-            ->where('status', RequirementStatus::PENDING_REVIEW->value);
+        $pendingReviews = $this->pendingReviews($requirements, $user);
         $dueTasks = $this->dueTasks($tasks, $user, $role);
         $pendingDefects = $this->pendingDefects($defects, $user, $role);
         $unplannedRequirements = RequirementProject::query()
@@ -114,6 +113,38 @@ class DashboardController extends Controller
         }
 
         return $query;
+    }
+
+    /**
+     * 待办口径=当前用户可执行：
+     * - 审核角色（有 requirement.approve）：当前可审核的需求，排除已被驳回待提交人重送的；
+     * - 提交人（requester）：被驳回待我修改重送的需求（其可执行动作是 resubmit/edit）；
+     * - 其他角色：无可执行的审核事项。
+     */
+    private function pendingReviews(Builder $requirements, User $user): Builder
+    {
+        $query = (clone $requirements)
+            ->where('status', RequirementStatus::PENDING_REVIEW->value);
+
+        if ($user->hasPermission('requirement.approve')) {
+            return $query->where(function (Builder $reviewable): void {
+                $reviewable
+                    ->whereNull('reviewer_id')
+                    ->orWhereNull('reviewed_at')
+                    ->orWhereNull('review_comment')
+                    ->orWhere('review_comment', '');
+            });
+        }
+
+        if ($user->user_type === UserType::SYSTEM_USER->value) {
+            return $query
+                ->whereNotNull('reviewer_id')
+                ->whereNotNull('reviewed_at')
+                ->whereNotNull('review_comment')
+                ->where('review_comment', '!=', '');
+        }
+
+        return $query->whereRaw('1 = 0');
     }
 
     private function pendingDefects(
@@ -180,7 +211,7 @@ class DashboardController extends Controller
         };
 
         $labels = [
-            'pending_reviews' => $role === 'requester' ? '审核中需求' : '待审核需求',
+            'pending_reviews' => $role === 'requester' ? '待我重新提交' : '待审核需求',
             'due_tasks' => in_array($role, ['supplier_dev', 'supplier_tester'], true)
                 ? '我的临期任务'
                 : '临期任务',

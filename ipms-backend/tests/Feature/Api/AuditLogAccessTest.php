@@ -118,9 +118,26 @@ class AuditLogAccessTest extends TestCase
         }
     }
 
-    public function test_pagination_is_database_backed_stable_and_empty_filters_are_ignored(): void
+    public function test_target_id_filter_isolates_a_single_records_history_within_scope(): void
     {
         $fixture = $this->fixture();
+        $filters = ['module' => 3, 'target_type' => 'task', 'target_id' => 920];
+
+        // 任务所属项目的经理与供应商树成员可见该任务的流转记录，且仅返回该目标
+        $this->assertVisible($fixture['pm'], [$fixture['scoped'][2]], $filters);
+        $this->assertVisible($fixture['supplier'], [$fixture['scoped'][2]], $filters);
+
+        // 无项目范围的用户看不到任何记录
+        $unrelated = User::factory()->withRole('it_member')->create();
+        $this->assertVisible($unrelated, [], $filters);
+
+        $this->actingAs($fixture['pm'])
+            ->getJson('/api/audit-logs?target_id=invalid')
+            ->assertUnprocessable();
+    }
+
+    public function test_pagination_is_database_backed_stable_and_empty_filters_are_ignored(): void
+    {        $fixture = $this->fixture();
         $this->actingAs($fixture['pm'])
             ->getJson('/api/audit-logs?page=2&page_size=2&module=&keyword=&date_to=')
             ->assertOk()

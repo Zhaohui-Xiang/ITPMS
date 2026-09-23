@@ -64,6 +64,7 @@ final class AuditLogController extends Controller
             'user_id' => ['nullable', 'integer', 'min:1'],
             'project_id' => ['nullable', 'integer', 'min:1'],
             'target_type' => ['nullable', 'string', 'max:100'],
+            'target_id' => ['nullable', 'integer', 'min:1'],
             'keyword' => ['nullable', 'string', 'max:200'],
             'date_from' => ['nullable', 'date_format:Y-m-d'],
             'date_to' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:date_from'],
@@ -82,7 +83,7 @@ final class AuditLogController extends Controller
                 $this->addTargets($scope, $request, (int) $filters['project_id']);
             });
         }
-        foreach (['module', 'action_type', 'user_id', 'target_type'] as $field) {
+        foreach (['module', 'action_type', 'user_id', 'target_type', 'target_id'] as $field) {
             if (isset($filters[$field])) {
                 $query->where($field, $filters[$field]);
             }

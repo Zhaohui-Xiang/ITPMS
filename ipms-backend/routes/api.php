@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\ApiDocumentController;
 use App\Http\Controllers\Api\AuditLogController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\DefectAttachmentController;
 use App\Http\Controllers\Api\DefectController;
 use App\Http\Controllers\Api\DocumentController;
 use App\Http\Controllers\Api\NotificationController;
@@ -134,6 +135,15 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/{id}/resolve', [DefectController::class, 'resolve'])->whereNumber('id');
         Route::post('/{id}/verify', [DefectController::class, 'verify'])->whereNumber('id');
         Route::post('/{id}/reopen', [DefectController::class, 'reopen'])->whereNumber('id');
+        Route::post('/{id}/attachments', [DefectAttachmentController::class, 'store'])->whereNumber('id');
+    });
+
+    // ========================================================================
+    // Defect Attachments (standalone)
+    // ========================================================================
+    Route::prefix('defect-attachments')->group(function () {
+        Route::get('/{id}/download', [DefectAttachmentController::class, 'download'])->whereNumber('id');
+        Route::delete('/{id}', [DefectAttachmentController::class, 'destroy'])->whereNumber('id');
     });
 
     // ========================================================================

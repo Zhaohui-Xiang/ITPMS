@@ -41,6 +41,7 @@ final class DefectResource extends JsonResource
             'screenshot' => $this->screenshot,
             'fix_description' => $this->fix_description,
             'closed_at' => $this->closed_at?->toISOString(),
+            'attachments' => $this->attachmentList(),
             'allowed_actions' => $this->allowedActions($request, $status),
             'created_at' => $this->created_at?->toISOString(),
             'updated_at' => $this->updated_at?->toISOString(),
@@ -80,6 +81,28 @@ final class DefectResource extends JsonResource
         }
 
         return $actions;
+    }
+
+    private function attachmentList(): array
+    {
+        // 列表/详情走 resourceQuery 的 eager load；动作响应单条懒加载，不产生 N+1
+        $attachments = $this->relationLoaded('attachments')
+            ? $this->attachments
+            : $this->attachments()
+                ->with('uploader:id,display_name')
+                ->orderByDesc('uploaded_at')
+                ->orderByDesc('id')
+                ->get();
+
+        return $attachments
+            ->map(fn ($attachment) => [
+                'id' => $attachment->id,
+                'filename' => $attachment->filename,
+                'file_size' => (int) $attachment->file_size,
+                'file_type' => $attachment->file_type,
+                'uploaded_by' => $this->userSummary($attachment->uploader),
+                'uploaded_at' => $attachment->uploaded_at?->toISOString(),
+            ])->values()->all();
     }
 
     private function userSummary(mixed $user): ?array

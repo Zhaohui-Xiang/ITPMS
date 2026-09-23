@@ -108,23 +108,74 @@ final class DashboardContractTest extends TestCase
             ['pending_reviews', 'pending_defects', 'unplanned_requirements', 'blocked_releases'],
             array_column($response->json('data.metrics'), 'key'),
         );
+        // 待办口径=我可执行：刚提交待审核的需求不需要提交人动作，不计入
         $this->assertSame([
-            'pending_reviews' => 1,
+            'pending_reviews' => 0,
             'pending_defects' => 1,
             'unplanned_requirements' => 1,
             'blocked_releases' => 1,
         ], collect($response->json('data.metrics'))->pluck('value', 'key')->all());
-        $this->assertQueueContains($response, 'priority_queue', 'requirement', $fixture['own_requirement']->id);
         $this->assertQueueContains($response, 'priority_queue', 'defect', $fixture['own_defect']->id);
         $this->assertQueueContains($response, 'release_risks', 'project_version', $fixture['inside_version']->id);
 
         $visibleIds = collect($response->json('data.priority_queue'))
             ->map(fn (array $item): string => $item['type'].':'.$item['id'])
             ->all();
+        $this->assertNotContains('requirement:'.$fixture['own_requirement']->id, $visibleIds);
         $this->assertNotContains('requirement:'.$fixture['other_inside_requirement']->id, $visibleIds);
         $this->assertNotContains('task:'.$fixture['inside_task']->id, $visibleIds);
         $this->assertNotContains('defect:'.$fixture['inside_defect']->id, $visibleIds);
         $this->assertQueueExcludesIds($response, $fixture['outside_ids']);
+    }
+
+    public function test_requester_pending_reviews_cover_rejected_requirements_awaiting_resubmission(): void
+    {
+        $fixture = $this->scopeFixture();
+        // 被驳回待重送：提交人可执行（修改后重新送审），计入待办并进入优先队列
+        $fixture['own_requirement']->update([
+            'reviewer_id' => $fixture['it_pm']->id,
+            'review_comment' => '请补充验收标准后重送',
+            'reviewed_at' => now(),
+        ]);
+
+        $response = $this->actingAs($fixture['requester'])
+            ->getJson('/api/dashboard/summary')
+            ->assertOk();
+
+        $metrics = collect($response->json('data.metrics'))->pluck('value', 'key');
+        $this->assertSame(1, $metrics['pending_reviews']);
+        $this->assertSame(
+            '待我重新提交',
+            collect($response->json('data.metrics'))->firstWhere('key', 'pending_reviews')['label'],
+        );
+        $this->assertQueueContains(
+            $response,
+            'priority_queue',
+            'requirement',
+            $fixture['own_requirement']->id,
+        );
+    }
+
+    public function test_reviewer_pending_reviews_exclude_rejected_requirements_awaiting_resubmission(): void
+    {
+        $fixture = $this->scopeFixture();
+        // 驳回后待提交人重送的需求不再计入审核人待办（审核人当前无可执行动作）
+        $fixture['own_requirement']->update([
+            'reviewer_id' => $fixture['it_pm']->id,
+            'review_comment' => '请补充验收标准后重送',
+            'reviewed_at' => now(),
+        ]);
+
+        $response = $this->actingAs($fixture['it_pm'])
+            ->getJson('/api/dashboard/summary')
+            ->assertOk();
+
+        $metrics = collect($response->json('data.metrics'))->pluck('value', 'key');
+        // 仅剩 other_inside_requirement 一条待审核
+        $this->assertSame(1, $metrics['pending_reviews']);
+        $this->assertQueueExcludesIds($response, [
+            'requirement' => $fixture['own_requirement']->id,
+        ]);
     }
 
     public function test_priority_and_release_queues_are_risk_ordered_and_limited_to_ten_real_records(): void

@@ -224,6 +224,10 @@ final class DefectController extends Controller
             'assignee:id,display_name',
             'requirement:id,title,status,submitter_id',
             'project:id,name,manager_id,supplier_org_id',
+            'attachments' => static fn ($query) => $query
+                ->with('uploader:id,display_name')
+                ->orderByDesc('uploaded_at')
+                ->orderByDesc('id'),
         ]);
     }
 
@@ -234,6 +238,10 @@ final class DefectController extends Controller
             'assignee:id,display_name',
             'requirement:id,title,status,submitter_id',
             'project:id,name,manager_id,supplier_org_id',
+            'attachments' => static fn ($query) => $query
+                ->with('uploader:id,display_name')
+                ->orderByDesc('uploaded_at')
+                ->orderByDesc('id'),
         ]);
     }
 }
