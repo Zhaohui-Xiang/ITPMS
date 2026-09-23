@@ -104,12 +104,12 @@ class DefectPolicy
 
     public function verify(User $user, Defect $defect): bool
     {
+        // D17 复测口径：具备 defect.retest 权限 且（缺陷提交人 或 项目成员）。
+        // defect.retest 只授予测试角色，因此甲方提交人无法复测自己登记的缺陷。
         return $user->isSuperAdmin()
             || (
-                $this->hasRole($user, 'supplier_tester')
-                && $user->hasPermission('defect.retest')
+                $user->hasPermission('defect.retest')
                 && (
-                    // 缺陷提交人（通常是登记缺陷的测试）可直接复测
                     $defect->reporter_id === $user->id
                     || $defect->project->members()
                         ->where('user_id', $user->id)

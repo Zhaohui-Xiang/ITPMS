@@ -23,13 +23,16 @@ class RolePermissionSeeder extends Seeder
             ]);
         }
 
-        // IT PM
+        // IT PM（D17：复测权限只授予测试角色，甲方登记缺陷后由测试复测）
+        $this->revokePermissions($roles['it_pm'], [
+            'defect.retest',
+        ]);
         $this->assignPermissions($roles['it_pm'], [
             'project.view', 'project.archive',
             'requirement.create', 'requirement.edit', 'requirement.view',
             'requirement.approve', 'requirement.assign', 'requirement.transition',
             'task.create', 'task.edit', 'task.assign', 'task.view',
-            'defect.create', 'defect.confirm', 'defect.assign', 'defect.retest', 'defect.view',
+            'defect.create', 'defect.confirm', 'defect.assign', 'defect.view',
             'document.upload', 'document.download', 'document.edit_api', 'document.view',
             'audit.view_scoped',
         ]);
