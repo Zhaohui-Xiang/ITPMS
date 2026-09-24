@@ -3,6 +3,7 @@
 use App\Exceptions\DomainConflictException;
 use App\Http\Middleware\AuditLogger;
 use App\Http\Middleware\CheckPermission;
+use App\Http\Middleware\EnsureUserIsActive;
 use App\Services\VersionGateLock;
 use App\Support\ApiResponse;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -34,6 +35,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'permission' => CheckPermission::class,
             'audit.log' => AuditLogger::class,
+            'active' => EnsureUserIsActive::class,
         ]);
 
         // Trust proxies (Nginx reverse proxy)

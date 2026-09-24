@@ -109,10 +109,11 @@ class ProjectMembershipTest extends TestCase
         foreach ([$pm, User::factory()->superAdmin()->create()] as $actor) {
             foreach ([['is_active' => false], ['is_disabled' => true]] as $state) {
                 $actor->update(['is_active' => true, 'is_disabled' => false, ...$state]);
+                // 禁用用户的会话被 EnsureUserIsActive 即时销毁，每个请求都需要重新建立认证态
                 $this->actingAs($actor)->getJson("/api/projects/{$project->id}/members")->assertForbidden();
                 $this->actingAs($actor)->getJson("/api/projects/{$project->id}/member-options")->assertForbidden();
-                $this->postJson("/api/projects/{$project->id}/members", ['user_id' => $tester->id])->assertForbidden();
-                $this->deleteJson("/api/projects/{$project->id}/members/{$tester->id}")->assertForbidden();
+                $this->actingAs($actor)->postJson("/api/projects/{$project->id}/members", ['user_id' => $tester->id])->assertForbidden();
+                $this->actingAs($actor)->deleteJson("/api/projects/{$project->id}/members/{$tester->id}")->assertForbidden();
             }
             $actor->update(['is_active' => true, 'is_disabled' => false]);
         }
