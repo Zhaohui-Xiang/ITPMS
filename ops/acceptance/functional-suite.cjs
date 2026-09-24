@@ -404,10 +404,9 @@ async function searchList(page, placeholder, keyword) {
       artifacts.projectId = project.id;
       await page.goto(`/projects/${project.id}/versions`);
       await page.waitForLoadState('networkidle');
-      assert.ok(
-        await page.getByRole('button', { name: '新建版本', exact: true }).count() > 0,
-        `it_pm 在项目「${project.name}」版本页看不到「新建版本」入口`,
-      );
+      await page.getByRole('button', { name: '新建版本', exact: true }).first()
+        .waitFor({ timeout: 10000 })
+        .catch(() => assert.fail(`it_pm 在项目「${project.name}」版本页看不到「新建版本」入口`));
       const shot = await screenshot(page, 'b7-versions-it-pm');
       return { projectId: project.id, screenshot: shot };
     });
