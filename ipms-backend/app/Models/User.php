@@ -85,13 +85,18 @@ class User extends Authenticatable
         return $this->roles()->where('code', 'super_admin')->exists();
     }
 
+    /**
+     * 有效超管（v1.8 §2.10 唯一判定）：运行时授权、最后超管统计、会话检查共同调用。
+     */
+    public function isEffectiveSuperAdmin(): bool
+    {
+        return $this->isSuperAdmin() && $this->is_active && ! $this->is_disabled;
+    }
+
     public function hasPermission(string $code): bool
     {
-        return cache()->remember("user_{$this->id}_perm_{$code}", 300, function () use ($code) {
-            return $this->roles()
-                ->whereHas('permissions', fn ($q) => $q->where('code', $code))
-                ->exists();
-        });
+        // v1.8 §2.2：委托 PermissionResolver（无配置规则时行为与 permission_role 现状一致）
+        return app(\App\Services\Permissions\PermissionResolver::class)->allows($this, $code);
     }
 
     public function getSupplierDescendantOrgIds(): array
