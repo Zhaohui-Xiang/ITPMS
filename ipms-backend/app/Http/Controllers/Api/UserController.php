@@ -87,7 +87,7 @@ class UserController extends Controller
             'display_name' => ['nullable', 'string', 'max:100'],
             'email' => ['nullable', 'email', 'max:254', $this->uniqueEmailRule()],
             'phone' => ['nullable', 'string', 'max:20'],
-            'user_type' => ['required', 'integer', 'in:2,3'], // 仅可创建供应商用户和系统用户
+            'user_type' => ['required', 'integer', 'in:1,2,3'],
             'role_ids' => ['nullable', 'array'],
             'role_ids.*' => ['integer', 'exists:roles,id'],
             'organization_ids' => ['nullable', 'array'],
@@ -245,6 +245,70 @@ class UserController extends Controller
             'code' => 200,
             'message' => '用户已禁用',
         ]);
+    }
+
+    /**
+     * 启用用户（解除禁用）
+     * POST /api/users/{id}/enable
+     */
+    public function enable(Request $request, int $id): JsonResponse
+    {
+        if (! $request->user()->isSuperAdmin()) {
+            return ApiResponse::error('FORBIDDEN', '仅超级管理员可以启用用户', 403);
+        }
+
+        $user = User::findOrFail($id);
+        $user->update(['is_disabled' => false]);
+
+        AuditLogger::log($request->user()->id, [
+            'user_name' => $request->user()->username,
+            'user_display_name' => $request->user()->display_name,
+            'user_type' => $request->user()->user_type,
+            'module' => 'user',
+            'action_type' => 'update',
+            'target_type' => 'user',
+            'target_id' => $user->id,
+            'target_name' => $user->display_name,
+            'detail' => ['action' => 'enable'],
+        ]);
+
+        return ApiResponse::success(null, '用户已启用');
+    }
+
+    /**
+     * 删除用户（软删除，同时禁用）
+     * DELETE /api/users/{id}
+     */
+    public function destroy(Request $request, int $id): JsonResponse
+    {
+        $currentUser = $request->user();
+        if (! $currentUser->isSuperAdmin()) {
+            return ApiResponse::error('FORBIDDEN', '仅超级管理员可以删除用户', 403);
+        }
+
+        $user = User::findOrFail($id);
+        if ($currentUser->id === $user->id) {
+            return ApiResponse::error('SELF_DELETE_FORBIDDEN', '不能删除自己的账号', 422);
+        }
+
+        // 最后超管保护（v1.8 §2.10）
+        app(\App\Services\Permissions\SuperAdminGuard::class)->protect($user, '删除', function () use ($user) {
+            $user->update(['is_disabled' => true]);
+            $user->delete();
+        });
+
+        AuditLogger::log($currentUser->id, [
+            'user_name' => $currentUser->username,
+            'user_display_name' => $currentUser->display_name,
+            'user_type' => $currentUser->user_type,
+            'module' => 'user',
+            'action_type' => 'delete',
+            'target_type' => 'user',
+            'target_id' => $user->id,
+            'target_name' => $user->display_name,
+        ]);
+
+        return ApiResponse::success(null, '用户已删除');
     }
 
     /**

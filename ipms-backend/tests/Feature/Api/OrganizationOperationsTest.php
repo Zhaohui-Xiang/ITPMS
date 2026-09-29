@@ -22,7 +22,30 @@ class OrganizationOperationsTest extends TestCase
         $this->deleteJson("/api/organizations/{$id}/users/{$member->id}")->assertOk();
         $this->putJson("/api/organizations/{$id}", ['name' => 'IT office'])->assertOk();
         $this->deleteJson("/api/organizations/{$id}")->assertOk();
-        $this->assertDatabaseHas('audit_logs', ['module' => 7, 'action_type' => 3, 'target_id' => (string) $id]);
+        // 组织模块审计独立编码（8=组织），不再错挂"系统与发布"
+        $this->assertDatabaseHas('audit_logs', ['module' => 8, 'action_type' => 3, 'target_id' => (string) $id]);
+    }
+
+    public function test_duplicate_sibling_org_name_is_rejected(): void
+    {
+        $admin = User::factory()->superAdmin()->create();
+        $parent = Organization::create(['name' => 'IT 部门', 'org_type' => 1]);
+
+        $this->actingAs($admin)->postJson('/api/organizations', [
+            'name' => '平台组', 'org_type' => 1, 'parent_id' => $parent->id,
+        ])->assertCreated();
+
+        // 同级同名 → 422
+        $this->postJson('/api/organizations', [
+            'name' => '平台组', 'org_type' => 1, 'parent_id' => $parent->id,
+        ])->assertUnprocessable()
+            ->assertJsonPath('error_code', 'ORGANIZATION_NAME_DUPLICATE');
+
+        // 不同父级同名 → 允许
+        $other = Organization::create(['name' => '研发中心', 'org_type' => 1]);
+        $this->postJson('/api/organizations', [
+            'name' => '平台组', 'org_type' => 1, 'parent_id' => $other->id,
+        ])->assertCreated();
     }
 
     public function test_non_admin_cannot_read_org_directory_or_manage_nodes(): void

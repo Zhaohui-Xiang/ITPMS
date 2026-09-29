@@ -12,7 +12,7 @@ const rows = ref([]), loading = ref(false), error = ref(null), exporting = ref(f
 const selected = ref(null), detailVisible = ref(false)
 const filters = reactive({ keyword: '', module: '', action_type: '', date_from: '', date_to: '' })
 const applied = ref({})
-const modules = { 1: '项目', 2: '需求', 3: '任务', 4: '缺陷', 5: '文档', 6: '用户', 7: '系统与发布' }
+const modules = { 1: '项目', 2: '需求', 3: '任务', 4: '缺陷', 5: '文档', 6: '用户', 7: '系统与发布', 8: '组织' }
 const actions = { 1: '创建', 2: '编辑', 3: '删除', 4: '状态变更', 5: '审核', 6: '分配', 7: '上传', 8: '下载', 9: '导出', 10: '登录' }
 let sequence = 0
 async function fetchRows() {

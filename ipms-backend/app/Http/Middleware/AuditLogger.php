@@ -50,7 +50,7 @@ class AuditLogger
             'user_type' => $data['user_type'] ?? 1,
             'module' => is_int($data['module']) ? $data['module'] : [
                 'project' => 1, 'requirement' => 2, 'task' => 3, 'defect' => 4,
-                'document' => 5, 'api_document' => 5, 'user' => 6, 'organization' => 7,
+                'document' => 5, 'api_document' => 5, 'user' => 6, 'organization' => 8,
             ][$data['module']],
             'action_type' => is_int($data['action_type']) ? $data['action_type'] : [
                 'create' => 1, 'create_folder' => 1, 'update' => 2, 'delete' => 3,

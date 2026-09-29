@@ -36,6 +36,16 @@ class UpdateUserRequest extends FormRequest
             'display_name' => ['nullable', 'string', 'max:100'],
             'email' => ['nullable', 'email', 'max:254', $this->uniqueEmailRule($userId)],
             'phone' => ['nullable', 'string', 'max:20'],
+            'role_ids' => ['prohibited'],
+            'organization_ids' => ['prohibited'],
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'role_ids.prohibited' => '角色调整暂不支持在此接口进行',
+            'organization_ids.prohibited' => '组织调整暂不支持在此接口进行',
         ];
     }
 

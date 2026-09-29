@@ -59,7 +59,7 @@ final class AuditLogController extends Controller
     private function query(Request $request): Builder
     {
         $filters = $request->validate([
-            'module' => ['nullable', 'integer', 'between:1,7'],
+            'module' => ['nullable', 'integer', 'between:1,8'],
             'action_type' => ['nullable', 'integer', 'between:1,10'],
             'user_id' => ['nullable', 'integer', 'min:1'],
             'project_id' => ['nullable', 'integer', 'min:1'],

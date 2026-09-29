@@ -85,4 +85,71 @@ class UserManagementScopeTest extends TestCase
             'organization_ids' => [$team->id],
         ];
     }
+
+    public function test_superadmin_can_create_internal_user(): void
+    {
+        $admin = User::factory()->superAdmin()->create();
+        $this->actingAs($admin)->postJson('/api/users', [
+            'username' => 'new.itpm',
+            'password' => 'test-only-password',
+            'user_type' => 1,
+            'role_ids' => [Role::where('code', 'it_pm')->value('id')],
+        ])
+            ->assertCreated()
+            ->assertJsonPath('data.user_type', 1);
+        $this->assertDatabaseHas('users', ['username' => 'new.itpm', 'user_type' => 1]);
+    }
+
+    public function test_disable_enable_cycle_restores_login(): void
+    {
+        $admin = User::factory()->superAdmin()->create();
+        $member = User::factory()->withRole('it_member')->create();
+
+        $this->actingAs($admin)->postJson("/api/users/{$member->id}/disable")->assertOk();
+        $this->assertTrue($member->refresh()->is_disabled);
+
+        $this->actingAs($admin)->postJson("/api/users/{$member->id}/enable")->assertOk();
+        $this->assertFalse($member->refresh()->is_disabled);
+    }
+
+    public function test_delete_soft_deletes_and_blocks_login(): void
+    {
+        $admin = User::factory()->superAdmin()->create();
+        $member = User::factory()->withRole('it_member')->create([
+            'username' => 'doomed.member', 'password' => 'Secret123',
+        ]);
+
+        $this->actingAs($admin)->deleteJson("/api/users/{$member->id}")->assertOk();
+        $this->assertSoftDeleted('users', ['id' => $member->id]);
+        $this->assertTrue($member->refresh()->is_disabled);
+
+        // 列表不再出现；登录被拒
+        $list = $this->actingAs($admin)->getJson('/api/users')->assertOk();
+        $this->assertNotContains($member->id, collect($list->json('data.items'))->pluck('id'));
+        $this->postJson('/api/login', ['username' => 'doomed.member', 'password' => 'Secret123'])
+            ->assertUnprocessable();
+
+        // 最后超管保护：自己删自己 422；存在其他有效超管时可删；删完后最后超管被保护
+        $other = User::factory()->superAdmin()->create();
+        $this->actingAs($admin)->deleteJson("/api/users/{$admin->id}")->assertUnprocessable();
+        $this->actingAs($other)->deleteJson("/api/users/{$admin->id}")->assertOk();
+        $this->actingAs($other)->deleteJson("/api/users/{$other->id}")->assertUnprocessable();
+    }
+
+    public function test_update_rejects_role_and_organization_fields_explicitly(): void
+    {
+        $admin = User::factory()->superAdmin()->create();
+        $member = User::factory()->withRole('it_member')->create();
+
+        $this->actingAs($admin)
+            ->putJson("/api/users/{$member->id}", [
+                'role_ids' => [Role::where('code', 'it_pm')->value('id')],
+            ])
+            ->assertUnprocessable()
+            ->assertJsonPath('error_code', 'VALIDATION_FAILED');
+
+        $this->actingAs($admin)
+            ->putJson("/api/users/{$member->id}", ['organization_ids' => [1]])
+            ->assertUnprocessable();
+    }
 }

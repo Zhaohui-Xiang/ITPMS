@@ -194,6 +194,8 @@ Route::middleware(['auth:sanctum', 'active'])->group(function () {
         Route::get('/{id}', [UserController::class, 'show']);
         Route::put('/{id}', [UserController::class, 'update']);
         Route::post('/{id}/disable', [UserController::class, 'disable']);
+        Route::post('/{id}/enable', [UserController::class, 'enable']);
+        Route::delete('/{id}', [UserController::class, 'destroy']);
     });
 
     // ========================================================================

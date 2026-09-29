@@ -53,6 +53,23 @@ final class OrganizationController extends Controller
             'description' => ['nullable', 'string', 'max:2000'],
             'parent_id' => ['nullable', 'integer', Rule::exists('organizations', 'id')->where('org_type', $request->integer('org_type'))],
         ]);
+        // 同级同名组织禁止（O-1）
+        $duplicate = Organization::query()
+            ->where('org_type', $data['org_type'])
+            ->where('name', $data['name'])
+            ->when(
+                $data['parent_id'] ?? null,
+                fn ($query, $parentId) => $query->where('parent_id', $parentId),
+                fn ($query) => $query->whereNull('parent_id'),
+            )
+            ->exists();
+        if ($duplicate) {
+            return ApiResponse::error(
+                'ORGANIZATION_NAME_DUPLICATE',
+                '同级已存在同名组织「'.$data['name'].'」。',
+                422,
+            );
+        }
         $node = DB::transaction(function () use ($request, $data) {
             $node = Organization::create([...$data, 'is_active' => true]);
             $this->audit($request, $node, 1);
@@ -132,7 +149,7 @@ final class OrganizationController extends Controller
         $user = $request->user();
         AuditLogger::log($user->id, [
             'user_name' => $user->username, 'user_display_name' => $user->display_name, 'user_type' => $user->user_type,
-            'module' => 7, 'action_type' => $action, 'target_type' => 'organization',
+            'module' => 'organization', 'action_type' => $action, 'target_type' => 'organization',
             'target_id' => $node->id, 'target_name' => $node->name, 'detail' => $detail,
         ]);
     }

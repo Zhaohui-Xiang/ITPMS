@@ -603,6 +603,22 @@ return [
             'policy_test' => 'UserManagementScopeTest',
         ],
 
+        'POST /api/users/{id}/enable' => [
+            'ability' => 'user.enable', 'phase' => 'deferred',
+            'route_models' => ['id' => 'App\Models\User'], 'body_models' => [],
+            'ability_args' => 'route:id', 'outputs' => null, 'channel' => 'http',
+            'policy' => 'App\Http\Controllers\Api\UserController@enable',
+            'policy_test' => 'UserManagementScopeTest',
+        ],
+        'DELETE /api/users/{id}' => [
+            'ability' => 'user.delete', 'phase' => 'deferred',
+            'route_models' => ['id' => 'App\Models\User'], 'body_models' => [],
+            'ability_args' => 'route:id', 'outputs' => null, 'channel' => 'http',
+            'non_overridable' => true, // 最后超管保护路径
+            'policy' => 'App\Http\Controllers\Api\UserController@destroy',
+            'policy_test' => 'UserManagementScopeTest',
+        ],
+
         // ---- 个人设置 ----
         'PUT /api/settings/profile' => [
             'ability' => null, 'phase' => 'A', 'route_models' => [], 'body_models' => ['App\Models\User'],
