@@ -345,6 +345,16 @@ describe('core work queues', () => {
     expect(emptyWrapper.text()).toContain('暂无可拆分任务的需求')
   })
 
+  it('shows a pending-confirm hint for defects awaiting internal confirmation', async () => {
+    mocks.listDefects.mockResolvedValue(page([
+      { ...defect(63, '待确认的供应商缺陷', ['edit']), status: 1, status_code: 'PENDING_CONFIRM', status_label: '待确认' },
+    ]))
+    const wrapper = mountView(DefectList)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="pending-confirm-63"]').text()).toContain('待甲方确认')
+  })
+
   it('verifies and reopens defects through named confirmation flows then reloads', async () => {
     mocks.listDefects.mockResolvedValue(page([
       defect(61, '权限校验失败', ['verify']),

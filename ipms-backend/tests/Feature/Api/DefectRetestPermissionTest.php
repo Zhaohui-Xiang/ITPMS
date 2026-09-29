@@ -267,4 +267,49 @@ final class DefectRetestPermissionTest extends TestCase
             'defect',
         );
     }
+
+    public function test_supplier_pm_assigns_confirmed_defect_to_team_developer(): void
+    {
+        $fixture = $this->fixture();
+        $supplierPm = User::factory()->withRole('supplier_pm')->create();
+        $supplierDev = User::factory()->withRole('supplier_dev')->create();
+        foreach ([$supplierPm, $supplierDev] as $member) {
+            $member->organizations()->attach($fixture['supplier']->id, [
+                'role_in_org' => 'member', 'is_primary' => true, 'assigned_at' => now(),
+            ]);
+        }
+        $fixture['defect']->update(['status' => DefectStatus::CONFIRMED->value]);
+
+        $this->actingAs($supplierPm)
+            ->getJson("/api/defects/{$fixture['defect']->id}")
+            ->assertOk()
+            ->assertJsonPath('data.allowed_actions', ['edit', 'assign']);
+
+        // 指派给本团队开发 → 进入修复中
+        $this->actingAs($supplierPm)
+            ->postJson("/api/defects/{$fixture['defect']->id}/assign", [
+                'assignee_id' => $supplierDev->id,
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.status_code', 'FIXING')
+            ->assertJsonPath('data.assignee.id', $supplierDev->id);
+
+        // 待确认状态仍只有甲方能确认：供应商 PM 无 confirm 动作且调用被拒
+        $pending = Defect::factory()->create([
+            'requirement_id' => $fixture['requirement']->id,
+            'project_id' => $fixture['project']->id,
+            'reporter_id' => $fixture['reporterTester']->id,
+            'created_by_id' => $fixture['reporterTester']->id,
+            'severity' => DefectSeverity::NORMAL->value,
+            'status' => DefectStatus::PENDING_CONFIRM->value,
+        ]);
+        $this->actingAs($supplierPm)
+            ->getJson("/api/defects/{$pending->id}")
+            ->assertOk()
+            ->assertJsonPath('data.allowed_actions', ['edit']);
+        $this->actingAs($supplierPm)
+            ->postJson("/api/defects/{$pending->id}/confirm")
+            ->assertForbidden()
+            ->assertJsonPath('error_code', 'FORBIDDEN');
+    }
 }

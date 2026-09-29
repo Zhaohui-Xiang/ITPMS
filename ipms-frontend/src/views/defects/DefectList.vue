@@ -460,6 +460,13 @@ onMounted(() => {
               </td>
               <td>
                 <div class="row-actions">
+                  <span
+                    v-if="defect.status_code === 'PENDING_CONFIRM' && !canUse(defect, 'confirm')"
+                    class="pending-confirm-hint"
+                    :data-testid="`pending-confirm-${defect.id}`"
+                  >
+                    待甲方确认
+                  </span>
                   <el-tooltip v-if="canUse(defect, 'edit')" content="编辑缺陷">
                     <el-button
                       text
@@ -719,6 +726,12 @@ onMounted(() => {
   :deep(.el-button + .el-button) {
     margin-left: 0;
   }
+}
+
+.pending-confirm-hint {
+  color: $color-muted;
+  font-size: $font-size-caption;
+  white-space: nowrap;
 }
 
 .form-grid {
