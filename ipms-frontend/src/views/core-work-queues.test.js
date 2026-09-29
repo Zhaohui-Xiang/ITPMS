@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   verifyDefect: vi.fn(),
   reopenDefect: vi.fn(),
   messageSuccess: vi.fn(),
+  userType: null,
   messageError: vi.fn(),
   confirm: vi.fn(),
   prompt: vi.fn(),
@@ -83,6 +84,7 @@ vi.mock('element-plus', () => ({
 }))
 vi.mock('@/composables/usePermission', () => ({
   usePermission: () => ({
+    userType: ref(mocks.userType),
     canCreate: () => true,
     canEdit: () => true,
     canPerform: (resource, action, localAllowed = true) => (
@@ -118,6 +120,7 @@ const stubs = {
   ElForm: passthrough('ElForm'),
   ElFormItem: passthrough('ElFormItem'),
   ElTooltip: passthrough('ElTooltip'),
+  ElCheckbox: { props: ['modelValue'], emits: ['update:modelValue', 'change'], template: "<input type=\"checkbox\" :checked=\"modelValue\" @change=\"$emit('change', $event.target.checked); $emit('update:modelValue', $event.target.checked)\" />" },
   ElPagination: true,
   ElSkeleton: true,
   ElEmpty: passthrough('ElEmpty'),
@@ -209,6 +212,7 @@ describe('core work queues', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     Object.keys(mocks.routeQuery).forEach((key) => delete mocks.routeQuery[key])
+    mocks.userType = null
     mocks.listProjects.mockResolvedValue(page([{ id: 7, name: 'ERP 升级' }]))
     mocks.listRequirements.mockResolvedValue(page([requirement()]))
     mocks.listTasks.mockResolvedValue(page([task()]))
@@ -248,6 +252,25 @@ describe('core work queues', () => {
     await wrapper.get('[data-testid="reset-filters"]').trigger('click')
     await flushPromises()
     expect(mocks.routerReplace).toHaveBeenCalledWith({ query: {} })
+  })
+
+  it('offers requesters a pending-acceptance filter that sends pending_acceptance=1', async () => {
+    mocks.userType = 3
+    const wrapper = mountView(RequirementList)
+    await flushPromises()
+
+    const checkbox = wrapper.get('[data-testid="filter-pending-acceptance"]')
+    await checkbox.setValue(true)
+    await flushPromises()
+    expect(mocks.listRequirements).toHaveBeenLastCalledWith(expect.objectContaining({ pending_acceptance: 1 }))
+  })
+
+  it('hides the pending-acceptance filter for non-requester roles', async () => {
+    mocks.userType = 1
+    const wrapper = mountView(RequirementList)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="filter-pending-acceptance"]').exists()).toBe(false)
   })
 
   it('does not render requirement mutations when the server returns no allowed actions', async () => {

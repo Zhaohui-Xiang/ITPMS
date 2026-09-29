@@ -20,7 +20,8 @@ import { usePermission } from '@/composables/usePermission'
 
 const route = useRoute()
 const router = useRouter()
-const { canCreate, canPerform } = usePermission()
+const { canCreate, canPerform, userType } = usePermission()
+const isRequester = computed(() => userType.value === 3)
 
 function positiveInteger(value, fallback) {
   const parsed = Number.parseInt(value, 10)
@@ -62,6 +63,7 @@ const keyword = ref(String(route.query.keyword ?? ''))
 const status = ref(route.query.status ? Number(route.query.status) : '')
 const priority = ref(route.query.priority ? Number(route.query.priority) : '')
 const projectId = ref(route.query.project_id ? Number(route.query.project_id) : '')
+const pendingAcceptance = ref(route.query.pending_acceptance === '1')
 const loading = ref(false)
 const error = ref(null)
 const busyId = ref(null)
@@ -75,7 +77,7 @@ const form = reactive({
   id: null,
   title: '',
   description: '',
-  priority: 2,
+  priority: 3,
   requirement_type: 1,
   expected_completion_date: '',
   project_ids: [],
@@ -90,6 +92,7 @@ function buildParams() {
   if (status.value !== '') params.status = Number(status.value)
   if (priority.value !== '') params.priority = Number(priority.value)
   if (projectId.value !== '') params.project_id = Number(projectId.value)
+  if (pendingAcceptance.value) params.pending_acceptance = 1
   return params
 }
 
@@ -101,6 +104,7 @@ function queryState() {
   if (status.value !== '') query.status = String(status.value)
   if (priority.value !== '') query.priority = String(priority.value)
   if (projectId.value !== '') query.project_id = String(projectId.value)
+  if (pendingAcceptance.value) query.pending_acceptance = '1'
   return query
 }
 
@@ -173,7 +177,7 @@ function resetForm() {
     id: null,
     title: '',
     description: '',
-    priority: 2,
+    priority: 3,
     requirement_type: 1,
     expected_completion_date: '',
     project_ids: [],
@@ -310,6 +314,10 @@ function projectNames(requirement) {
   return (requirement.projects ?? []).map((project) => project.name).join('、') || '-'
 }
 
+function formatDate(value) {
+  return value ? String(value).slice(0, 10) : '-'
+}
+
 function canUse(requirement, action, localAllowed = true) {
   return canPerform(requirement, action, localAllowed)
 }
@@ -358,6 +366,15 @@ onMounted(() => {
       <el-select v-model="projectId" class="filter-control" clearable filterable placeholder="全部项目">
         <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
       </el-select>
+      <el-checkbox
+        v-if="isRequester"
+        v-model="pendingAcceptance"
+        class="filter-acceptance"
+        data-testid="filter-pending-acceptance"
+        @change="applyFilters"
+      >
+        待我验收
+      </el-checkbox>
     </FilterBar>
 
     <PaginatedTable
@@ -381,7 +398,10 @@ onMounted(() => {
               <th>关联项目</th>
               <th>优先级</th>
               <th>状态</th>
+              <th>执行负责人</th>
+              <th>期望完成</th>
               <th>提交人</th>
+              <th>更新时间</th>
               <th class="actions-column">操作</th>
             </tr>
           </thead>
@@ -401,7 +421,10 @@ onMounted(() => {
                   :status-label="requirement.status_label"
                 />
               </td>
+              <td>{{ requirement.dev_lead?.display_name || '-' }}</td>
+              <td>{{ requirement.expected_completion_date || '-' }}</td>
               <td>{{ requirement.submitter?.display_name || '-' }}</td>
+              <td>{{ formatDate(requirement.updated_at) }}</td>
               <td>
                 <div class="row-actions">
                   <el-tooltip content="查看详情">
@@ -485,6 +508,7 @@ onMounted(() => {
             />
           </el-form-item>
           <el-form-item label="关联项目" required>
+            <p class="field-hint">该需求需要在哪些系统/项目中交付，可多选</p>
             <el-select v-model="form.project_ids" multiple filterable :disabled="!canEditProjectScope" :loading="projectOptionsLoading" placeholder="选择项目">
               <el-option
                 v-for="project in submissionProjects"
@@ -498,7 +522,7 @@ onMounted(() => {
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="projectOptionsLoading || Boolean(projectOptionsError)" @click="saveRequirement">保存</el-button>
+        <el-button type="primary" :loading="saving" :disabled="projectOptionsLoading || Boolean(projectOptionsError)" @click="saveRequirement">{{ formMode === 'create' ? '提交审核' : '保存' }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -633,5 +657,12 @@ onMounted(() => {
   .form-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.field-hint {
+  margin: 0 0 6px;
+  color: $color-muted;
+  font-size: $font-size-caption;
+  line-height: 1.5;
 }
 </style>

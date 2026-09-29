@@ -5,11 +5,12 @@ import ExecutionOwnerEditor from '@/components/requirements/ExecutionOwnerEditor
 
 const api = vi.hoisted(() => ({
   getRequirement: vi.fn(), getRequirementVersions: vi.fn(), listTasks: vi.fn(), listDefects: vi.fn(),
-  listExecutionOwnerOptions: vi.fn(), updateRequirement: vi.fn(),
+  listExecutionOwnerOptions: vi.fn(), updateRequirement: vi.fn(), listAuditLogs: vi.fn(),
 }))
 vi.mock('@/api/requirement', () => ({ ...api, reviewRequirement: vi.fn(), transitionRequirement: vi.fn() }))
 vi.mock('@/api/task', () => ({ listTasks: api.listTasks }))
 vi.mock('@/api/defect', () => ({ listDefects: api.listDefects }))
+vi.mock('@/api/auditLog', () => ({ listAuditLogs: api.listAuditLogs }))
 vi.mock('vue-router', async importOriginal => ({
   ...await importOriginal(),
   useRoute: () => ({ params: { id: '10' } }),
@@ -45,6 +46,7 @@ beforeEach(() => {
   api.getRequirementVersions.mockResolvedValue(response([]))
   api.listTasks.mockResolvedValue(response({ items: [] }))
   api.listDefects.mockResolvedValue(response({ items: [] }))
+  api.listAuditLogs.mockResolvedValue(response({ items: [] }))
 })
 
 describe('requirement detail error handling', () => {
@@ -59,6 +61,29 @@ describe('requirement detail error handling', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('需求不存在或已被删除')
     expect(wrapper.text()).not.toContain('could not be found')
+  })
+})
+
+describe('requirement detail acceptance records and type label', () => {
+  it('renders requirement_type_label instead of raw type number', async () => {
+    api.getRequirement.mockResolvedValue(response({ ...requirement, requirement_type: 1, requirement_type_label: '功能需求' }))
+    const wrapper = render()
+    await flushPromises()
+    expect(wrapper.text()).toContain('功能需求')
+    expect(wrapper.text()).not.toContain('类型 #')
+  })
+
+  it('lists acceptance records from audit history', async () => {
+    api.getRequirement.mockResolvedValue(response({ ...requirement, allowed_actions: [] }))
+    api.listAuditLogs.mockResolvedValue(response({ items: [
+      { id: 1, user_display_name: '演示需求提出人', action_type: 4, detail: { to_delivery_status: 7 }, created_at: '2026-09-20T08:00:00Z' },
+      { id: 2, user_display_name: '演示 IT 项目经理', action_type: 4, detail: { to_delivery_status: 3 }, created_at: '2026-09-19T08:00:00Z' },
+    ] }))
+    const wrapper = render()
+    await flushPromises()
+    expect(wrapper.text()).toContain('验收记录')
+    expect(wrapper.text()).toContain('验收通过')
+    expect(wrapper.text()).toContain('演示需求提出人')
   })
 })
 

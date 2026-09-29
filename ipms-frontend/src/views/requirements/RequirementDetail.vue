@@ -10,6 +10,7 @@ import {
   transitionRequirement,
 } from '@/api/requirement'
 import { listTasks } from '@/api/task'
+import { listAuditLogs } from '@/api/auditLog'
 import { listDefects } from '@/api/defect'
 import AsyncState from '@/components/common/AsyncState.vue'
 import ProjectDeliveryTable from '@/components/requirements/ProjectDeliveryTable.vue'
@@ -31,6 +32,7 @@ const requirement = ref(null)
 const tasks = ref([])
 const defects = ref([])
 const revisions = ref([])
+const acceptanceRecords = ref([])
 const loading = ref(false)
 const error = ref(null)
 const reviewVisible = ref(false)
@@ -61,7 +63,8 @@ async function loadDetail() {
       taskResponse,
       defectResponse,
       revisionResponse,
-    ] = await Promise.all([
+      auditResponse,
+] = await Promise.all([
       getRequirement(requirementId.value),
       listTasks({
         requirement_id: requirementId.value,
@@ -74,17 +77,27 @@ async function loadDetail() {
         page_size: 100,
       }),
       getRequirementVersions(requirementId.value),
+      listAuditLogs({
+        module: 2,
+        target_type: 'requirement',
+        target_id: Number(requirementId.value),
+        page: 1,
+        page_size: 50,
+      }),
     ])
 
     requirement.value = requirementResponse?.data?.data ?? null
     tasks.value = paginatedItems(taskResponse)
     defects.value = paginatedItems(defectResponse)
     revisions.value = revisionResponse?.data?.data ?? []
+    acceptanceRecords.value = (auditResponse?.data?.data?.items ?? [])
+      .filter((record) => Number(record.detail?.to_delivery_status) === 7)
   } catch (requestError) {
     requirement.value = null
     tasks.value = []
     defects.value = []
     revisions.value = []
+    acceptanceRecords.value = []
     const mapped = mapApiError(requestError)
     // 后端 404 默认返回英文原文，详情页统一中文化，不暴露内部信息
     if (mapped.status === 404) {
@@ -239,7 +252,7 @@ onMounted(loadDetail)
               {{ requirement.priority_label || '-' }}
             </el-descriptions-item>
             <el-descriptions-item label="需求类型">
-              {{ requirement.requirement_type ? `类型 #${requirement.requirement_type}` : '-' }}
+              {{ requirement.requirement_type_label || '-' }}
             </el-descriptions-item>
             <el-descriptions-item label="期望完成">
               {{ requirement.expected_completion_date || '-' }}
@@ -367,6 +380,24 @@ onMounted(loadDetail)
                 {{ attachment.uploaded_by?.display_name || '-' }} ·
                 {{ formatDate(attachment.uploaded_at) }}
               </span>
+            </li>
+          </ul>
+        </section>
+
+        <section class="detail-band" aria-labelledby="requirement-acceptance-title">
+          <div class="band-heading">
+            <h2 id="requirement-acceptance-title">验收记录</h2>
+            <span>{{ acceptanceRecords.length }} 条</span>
+          </div>
+          <div v-if="acceptanceRecords.length === 0" class="section-empty">暂无验收记录</div>
+          <ul v-else class="acceptance-list">
+            <li v-for="record in acceptanceRecords" :key="record.id">
+              <div>
+                <strong>{{ record.user_display_name || record.user_name }}</strong>
+                <span>验收通过</span>
+                <span v-if="record.detail?.comment" class="acceptance-comment">{{ record.detail.comment }}</span>
+              </div>
+              <span>{{ formatDate(record.created_at) }}</span>
             </li>
           </ul>
         </section>
@@ -547,13 +578,15 @@ onMounted(loadDetail)
 }
 
 .attachment-list,
-.revision-list {
+.revision-list,
+.acceptance-list {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.attachment-list li {
+.attachment-list li,
+.acceptance-list li {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -627,13 +660,20 @@ onMounted(loadDetail)
 
 @media (max-width: 640px) {
   .band-heading,
-  .attachment-list li {
+  .attachment-list li,
+  .acceptance-list li {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .attachment-list li > span {
+  .attachment-list li > span,
+  .acceptance-list li > span {
     text-align: left;
   }
+}
+
+.acceptance-comment {
+  color: $color-muted;
+  font-size: $font-size-caption;
 }
 </style>

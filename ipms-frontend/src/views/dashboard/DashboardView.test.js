@@ -168,6 +168,39 @@ describe('DashboardView', () => {
     expect(wrapper.text()).toContain('暂无发布风险')
   })
 
+  it('renders queue reason tags and hides the risk band when the role has no version access', async () => {
+    getDashboardSummary.mockResolvedValue(response({
+      metrics: [],
+      priority_queue: [{
+        type: 'requirement',
+        id: 31,
+        title: '待我验收的需求',
+        project: 'Operations',
+        due_at: '2026-09-08',
+        severity: 'high',
+        reason: '待验收',
+        target_url: '/requirements/31',
+      }],
+      release_risks: [],
+      show_release_risks: false,
+    }))
+
+    const wrapper = mountDashboard('requester')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('待验收')
+    expect(wrapper.find('[aria-labelledby="risk-heading"]').exists()).toBe(false)
+  })
+
+  it('shows the risk band by default for manager roles', async () => {
+    getDashboardSummary.mockResolvedValue(response(emptySummary()))
+
+    const wrapper = mountDashboard('it_pm')
+    await flushPromises()
+
+    expect(wrapper.find('[aria-labelledby="risk-heading"]').exists()).toBe(true)
+  })
+
   it('renders independent empty states without legacy mock records', async () => {
     getDashboardSummary.mockResolvedValue(response(emptySummary()))
 

@@ -15,6 +15,7 @@ const summary = ref({
   metrics: [],
   priority_queue: [],
   release_risks: [],
+  show_release_risks: true,
 })
 
 const roleLabels = {
@@ -141,6 +142,7 @@ onMounted(loadSummary)
                     {{ severityLabels[item.severity] ?? item.severity }}
                   </el-tag>
                   <span>{{ typeLabels[item.type] ?? item.type }}</span>
+                  <span v-if="item.reason" class="queue-reason">{{ item.reason }}</span>
                   <span v-if="item.project">{{ item.project }}</span>
                 </div>
                 <strong>{{ item.title }}</strong>
@@ -164,7 +166,7 @@ onMounted(loadSummary)
           <el-empty v-else description="暂无优先事项" :image-size="72" />
         </section>
 
-        <section class="work-band work-band--risk" aria-labelledby="risk-heading">
+        <section v-if="summary.show_release_risks !== false" class="work-band work-band--risk" aria-labelledby="risk-heading">
           <header class="band-heading">
             <div>
               <h2 id="risk-heading">发布风险</h2>
@@ -183,6 +185,7 @@ onMounted(loadSummary)
                   <el-tag :type="severityType(item.severity)" size="small">
                     {{ severityLabels[item.severity] ?? item.severity }}
                   </el-tag>
+                  <span v-if="item.reason" class="queue-reason">{{ item.reason }}</span>
                   <span>{{ item.project }}</span>
                 </div>
                 <strong>{{ item.title }}</strong>
@@ -388,6 +391,10 @@ onMounted(loadSummary)
   color: $color-muted;
   font-size: $font-size-caption;
   line-height: 18px;
+}
+
+.queue-reason {
+  color: $color-primary;
 }
 
 .queue-link {
