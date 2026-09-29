@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useSidebarStore } from '@/stores/sidebar'
 import GlobalSearch from './GlobalSearch.vue'
 import BrandMark from './BrandMark.vue'
+import NotificationBell from './NotificationBell.vue'
 import ProfileDialog from '@/components/common/ProfileDialog.vue'
 
 const authStore = useAuthStore()
@@ -50,11 +51,7 @@ function handleDialogVisibility(value) {
     </div>
 
     <div class="header-right">
-      <el-tooltip content="站内通知尚未上线">
-        <el-button text disabled class="header-icon-btn" aria-label="站内通知尚未上线">
-          <el-icon :size="20"><Bell /></el-icon>
-        </el-button>
-      </el-tooltip>
+      <NotificationBell />
 
       <el-dropdown trigger="click" @command="handleCommand">
         <div class="user-info">

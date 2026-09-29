@@ -26,3 +26,33 @@ export function updateNotificationConfig(data) {
 export function listNotificationLogs(params) {
   return request.get('/notification-logs', { params })
 }
+
+/**
+ * 站内通知收件箱
+ * @param {Object} params - { page, page_size }
+ */
+export function listInbox(params) {
+  return request.get('/notifications', { params })
+}
+
+/**
+ * 未读通知数
+ */
+export function getUnreadCount() {
+  return request.get('/notifications/unread-count')
+}
+
+/**
+ * 标记单条已读
+ * @param {Number|String} id
+ */
+export function markNotificationRead(id) {
+  return request.post(`/notifications/${id}/read`)
+}
+
+/**
+ * 全部标记已读
+ */
+export function markAllNotificationsRead() {
+  return request.post('/notifications/read-all')
+}

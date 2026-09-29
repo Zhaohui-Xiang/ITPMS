@@ -2,6 +2,7 @@ import { defineComponent, nextTick } from 'vue'
 import { shallowMount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import HeaderBar from './HeaderBar.vue'
+import NotificationBell from './NotificationBell.vue'
 
 const { authStore, routerPush, sidebarStore } = vi.hoisted(() => ({
   authStore: {
@@ -74,12 +75,12 @@ describe('HeaderBar', () => {
     authStore.mustChangePassword = false
   })
 
-  it('shows search without inventing an unread notification count', () => {
+  it('renders the live notification bell instead of the disabled placeholder', () => {
     const wrapper = shallowMount(HeaderBar, { global: { stubs } })
 
     expect(wrapper.findComponent(GlobalSearch).exists()).toBe(true)
-    expect(wrapper.findComponent(ElBadge).exists()).toBe(false)
-    expect(wrapper.get('[aria-label="站内通知尚未上线"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.findComponent(NotificationBell).exists()).toBe(true)
+    expect(wrapper.find('[aria-label="站内通知尚未上线"]').exists()).toBe(false)
   })
 
   it('opens ProfileDialog instead of navigating to an invalid profile route', async () => {
