@@ -82,14 +82,15 @@ final class DashboardContractTest extends TestCase
 
         $this->assertSummaryContract($response);
         $this->assertSame(
-            ['due_tasks', 'pending_defects', 'blocked_releases'],
+            ['due_tasks', 'pending_defects'],
             array_column($response->json('data.metrics'), 'key'),
         );
         $this->assertSame([
             'due_tasks' => 1,
             'pending_defects' => 1,
-            'blocked_releases' => 1,
         ], collect($response->json('data.metrics'))->pluck('value', 'key')->all());
+        // 供应商角色无版本菜单：发布风险卡片隐藏（数据仍返回，前端不展示）
+        $this->assertFalse($response->json('data.show_release_risks'));
         $this->assertQueueContains($response, 'priority_queue', 'task', $fixture['inside_task']->id);
         $this->assertQueueContains($response, 'priority_queue', 'defect', $fixture['inside_defect']->id);
         $this->assertQueueContains($response, 'release_risks', 'project_version', $fixture['inside_version']->id);
@@ -105,16 +106,17 @@ final class DashboardContractTest extends TestCase
 
         $this->assertSummaryContract($response);
         $this->assertSame(
-            ['pending_reviews', 'pending_defects', 'unplanned_requirements', 'blocked_releases'],
+            ['my_requirements', 'pending_acceptance', 'pending_reviews', 'pending_defects'],
             array_column($response->json('data.metrics'), 'key'),
         );
-        // 待办口径=我可执行：刚提交待审核的需求不需要提交人动作，不计入
+        // 提出人视角：我的需求进展 + 待我验收 + 待我重新提交（我可执行口径）
         $this->assertSame([
+            'my_requirements' => 2,
+            'pending_acceptance' => 0,
             'pending_reviews' => 0,
             'pending_defects' => 1,
-            'unplanned_requirements' => 1,
-            'blocked_releases' => 1,
         ], collect($response->json('data.metrics'))->pluck('value', 'key')->all());
+        $this->assertFalse($response->json('data.show_release_risks'));
         $this->assertQueueContains($response, 'priority_queue', 'defect', $fixture['own_defect']->id);
         $this->assertQueueContains($response, 'release_risks', 'project_version', $fixture['inside_version']->id);
 
@@ -176,6 +178,58 @@ final class DashboardContractTest extends TestCase
         $this->assertQueueExcludesIds($response, [
             'requirement' => $fixture['own_requirement']->id,
         ]);
+    }
+
+    public function test_requester_pending_acceptance_covers_deployed_deliveries(): void
+    {
+        $fixture = $this->scopeFixture();
+        $deployed = Requirement::factory()->create([
+            'title' => 'Requester deployed delivery',
+            'submitter_id' => $fixture['requester']->id,
+            'created_by_id' => $fixture['requester']->id,
+            'status' => RequirementStatus::DEPLOYED->value,
+            'priority' => Priority::HIGH->value,
+        ]);
+        RequirementProject::factory()
+            ->for($deployed)
+            ->for($fixture['inside_defect']->project)
+            ->create(['delivery_status' => ProjectDeliveryStatus::DEPLOYED->value]);
+
+        $response = $this->actingAs($fixture['requester'])
+            ->getJson('/api/dashboard/summary')
+            ->assertOk();
+
+        $metrics = collect($response->json('data.metrics'))->pluck('value', 'key');
+        $this->assertSame(1, $metrics['pending_acceptance']);
+        $this->assertSame(
+            '待我验收',
+            collect($response->json('data.metrics'))->firstWhere('key', 'pending_acceptance')['label'],
+        );
+        $queueItem = collect($response->json('data.priority_queue'))
+            ->firstWhere(fn (array $item) => $item['type'] === 'requirement' && $item['id'] === $deployed->id);
+        $this->assertNotNull($queueItem);
+        $this->assertSame('待验收', $queueItem['reason']);
+    }
+
+    public function test_it_member_dashboard_only_counts_own_tasks_and_defects(): void
+    {
+        $fixture = $this->scopeFixture();
+        $member = User::factory()->withRole('it_member')->create();
+        DB::table('project_members')->insert([
+            'project_id' => $fixture['inside_defect']->project_id,
+            'user_id' => $member->id,
+            'role_in_project' => 'member',
+            'assigned_by_id' => $fixture['it_pm']->id,
+            'assigned_at' => now(),
+        ]);
+        // 项目内既有任务/缺陷均不属于该成员（inside_task 负责人是 supplier_dev）
+        $response = $this->actingAs($member)
+            ->getJson('/api/dashboard/summary')
+            ->assertOk();
+
+        $metrics = collect($response->json('data.metrics'))->pluck('value', 'key');
+        $this->assertSame(0, $metrics['due_tasks']);
+        $this->assertSame(0, $metrics['pending_defects']);
     }
 
     public function test_priority_and_release_queues_are_risk_ordered_and_limited_to_ten_real_records(): void
@@ -250,11 +304,11 @@ final class DashboardContractTest extends TestCase
             ->assertOk();
 
         $this->assertSame([], $response->json('data.release_risks'));
-        $this->assertSame(
-            0,
-            collect($response->json('data.metrics'))
-                ->firstWhere('key', 'blocked_releases')['value'],
+        // 供应商执行角色无版本菜单：不出受阻发布卡，风险区隐藏
+        $this->assertNull(
+            collect($response->json('data.metrics'))->firstWhere('key', 'blocked_releases'),
         );
+        $this->assertFalse($response->json('data.show_release_risks'));
         $this->assertStringNotContainsString(
             'Scoped release risk',
             $response->getContent(),
@@ -484,7 +538,7 @@ final class DashboardContractTest extends TestCase
             ->pluck('target_url', 'key')
             ->all();
         $this->assertSame([
-            'pending_reviews' => '/requirements',
+            'pending_reviews' => '/requirements?status=1',
             'due_tasks' => '/tasks',
             'pending_defects' => '/defects',
             'unplanned_requirements' => '/requirements',
@@ -493,11 +547,11 @@ final class DashboardContractTest extends TestCase
 
         $priority = collect($response->json('data.priority_queue'));
         $this->assertSame(
-            '/tasks',
+            '/tasks/'.$priority->firstWhere('type', 'task')['id'],
             $priority->firstWhere('type', 'task')['target_url'],
         );
         $this->assertSame(
-            '/defects',
+            '/defects/'.$priority->firstWhere('type', 'defect')['id'],
             $priority->firstWhere('type', 'defect')['target_url'],
         );
         $this->assertSame(
@@ -514,13 +568,13 @@ final class DashboardContractTest extends TestCase
 
         $this->assertSame(['code', 'message', 'data'], array_keys($payload));
         $this->assertSame(
-            ['metrics', 'priority_queue', 'release_risks'],
+            ['metrics', 'priority_queue', 'release_risks', 'show_release_risks'],
             array_keys($payload['data']),
         );
 
         foreach (array_merge($payload['data']['priority_queue'], $payload['data']['release_risks']) as $item) {
             $this->assertSame(
-                ['type', 'id', 'title', 'project', 'due_at', 'severity', 'target_url'],
+                ['type', 'id', 'title', 'project', 'due_at', 'severity', 'reason', 'target_url'],
                 array_keys($item),
             );
         }

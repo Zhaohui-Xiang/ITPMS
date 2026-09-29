@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Enums\DefectStatus;
+use App\Enums\ProjectDeliveryStatus;
 use App\Enums\ProjectVersionStatus;
 use App\Enums\RequirementStatus;
 use App\Enums\TaskStatus;
@@ -73,6 +74,18 @@ class DashboardController extends Controller
                 (clone $visibleProjects)->select('projects.id'),
             );
 
+        // requester 视角：我的需求进展 + 待我验收（已上线待验收的交付）；仅 requester 才查询
+        $isRequester = $role === 'requester';
+        $myRequirements = $isRequester
+            ? (clone $requirements)->where('submitter_id', $user->id)
+            : null;
+        $pendingAcceptance = $isRequester
+            ? (clone $requirements)
+                ->where('submitter_id', $user->id)
+                ->whereHas('projects', fn (Builder $delivery): Builder => $delivery
+                    ->where('requirement_project.delivery_status', ProjectDeliveryStatus::DEPLOYED->value))
+            : null;
+
         $releaseEvaluation = $this->releaseEvaluation(
             $this->visibleVersionQuery($user)->get(),
         );
@@ -82,18 +95,22 @@ class DashboardController extends Controller
             'pending_defects' => (clone $pendingDefects)->count(),
             'unplanned_requirements' => (clone $unplannedRequirements)->count(),
             'blocked_releases' => $releaseEvaluation['blocked_count'],
+            'my_requirements' => $myRequirements === null ? 0 : (clone $myRequirements)->count(),
+            'pending_acceptance' => $pendingAcceptance === null ? 0 : (clone $pendingAcceptance)->count(),
         ];
 
         return ApiResponse::success([
-            'metrics' => $this->metrics($role, $counts),
+            'metrics' => $this->metrics($role, $counts, $user),
             'priority_queue' => $this->priorityQueue(
                 $role,
                 $pendingReviews,
                 $dueTasks,
                 $pendingDefects,
                 $visibleProjectIds,
+                $pendingAcceptance,
             ),
             'release_risks' => $releaseEvaluation['items'],
+            'show_release_risks' => in_array($role, ['super_admin', 'it_pm', 'it_member'], true),
         ]);
     }
 
@@ -108,7 +125,8 @@ class DashboardController extends Controller
             ->whereNotNull('due_date')
             ->whereDate('due_date', '<=', today()->addDays(self::DUE_WINDOW_DAYS));
 
-        if (in_array($role, ['supplier_dev', 'supplier_tester'], true)) {
+        // "我可执行"口径：执行类角色只看分配给自己的任务
+        if (in_array($role, ['it_member', 'supplier_dev', 'supplier_tester'], true)) {
             $query->where('assignee_id', $user->id);
         }
 
@@ -158,6 +176,13 @@ class DashboardController extends Controller
         if ($role === 'supplier_dev') {
             $query->where('assignee_id', $user->id);
         }
+        if ($role === 'it_member') {
+            // 我的缺陷：分配给我或我提交的
+            $query->where(function (Builder $mine) use ($user): void {
+                $mine->where('assignee_id', $user->id)
+                    ->orWhere('reporter_id', $user->id);
+            });
+        }
         if ($role === 'supplier_tester') {
             $query
                 ->where('status', DefectStatus::PENDING_RETEST->value)
@@ -180,7 +205,7 @@ class DashboardController extends Controller
      * @param  array<string, int>  $counts
      * @return list<array{key: string, label: string, value: int, target_url: string}>
      */
-    private function metrics(string $role, array $counts): array
+    private function metrics(string $role, array $counts, User $user): array
     {
         $keys = match ($role) {
             'super_admin', 'it_pm' => [
@@ -190,33 +215,41 @@ class DashboardController extends Controller
                 'unplanned_requirements',
                 'blocked_releases',
             ],
-            'it_member', 'supplier_pm' => [
+            // 执行视角：只看自己的任务与缺陷（供应商无版本菜单，不出受阻发布卡）
+            'it_member' => [
                 'due_tasks',
                 'pending_defects',
                 'unplanned_requirements',
                 'blocked_releases',
+            ],
+            'supplier_pm' => [
+                'due_tasks',
+                'pending_defects',
+                'unplanned_requirements',
             ],
             'supplier_dev', 'supplier_tester' => [
                 'due_tasks',
                 'pending_defects',
-                'blocked_releases',
             ],
+            // 提出人视角：我的需求进展 / 待我验收 / 待我重新提交 / 未关闭缺陷
             'requester' => [
+                'my_requirements',
+                'pending_acceptance',
                 'pending_reviews',
                 'pending_defects',
-                'unplanned_requirements',
-                'blocked_releases',
             ],
             default => [],
         };
 
         $labels = [
+            'my_requirements' => '我的需求',
+            'pending_acceptance' => '待我验收',
             'pending_reviews' => $role === 'requester' ? '待我重新提交' : '待审核需求',
-            'due_tasks' => in_array($role, ['supplier_dev', 'supplier_tester'], true)
+            'due_tasks' => in_array($role, ['it_member', 'supplier_dev', 'supplier_tester'], true)
                 ? '我的临期任务'
                 : '临期任务',
             'pending_defects' => match ($role) {
-                'supplier_dev' => '我的待处理缺陷',
+                'it_member', 'supplier_dev' => '我的待处理缺陷',
                 'supplier_tester' => '待复测缺陷',
                 'requester' => '未关闭缺陷',
                 default => '待处理缺陷',
@@ -224,10 +257,15 @@ class DashboardController extends Controller
             'unplanned_requirements' => $role === 'requester' ? '待规划需求' : '未规划需求',
             'blocked_releases' => $role === 'requester' ? '关联发布风险' : '受阻发布',
         ];
+        // 统计卡跳转带过滤参数，落点即是 filtered 列表
         $targets = [
-            'pending_reviews' => '/requirements',
-            'due_tasks' => '/tasks',
-            'pending_defects' => '/defects',
+            'my_requirements' => '/requirements',
+            'pending_acceptance' => '/requirements?pending_acceptance=1',
+            'pending_reviews' => '/requirements?status=1',
+            'due_tasks' => in_array($role, ['it_member', 'supplier_dev', 'supplier_tester'], true)
+                ? '/tasks?assignee_id='.$user->id
+                : '/tasks',
+            'pending_defects' => $role === 'supplier_tester' ? '/defects?status=4' : '/defects',
             'unplanned_requirements' => '/requirements',
             'blocked_releases' => '/projects',
         ];
@@ -250,8 +288,31 @@ class DashboardController extends Controller
         Builder $dueTasks,
         Builder $pendingDefects,
         array $visibleProjectIds,
+        ?Builder $pendingAcceptance = null,
     ): array {
         $items = collect();
+
+        // 提出人视角：待我验收排在最前
+        if ($role === 'requester' && $pendingAcceptance !== null) {
+            (clone $pendingAcceptance)
+                ->orderBy('priority')
+                ->orderByRaw('CASE WHEN expected_completion_date IS NULL THEN 1 ELSE 0 END')
+                ->orderBy('expected_completion_date')
+                ->limit(self::QUEUE_LIMIT)
+                ->get()
+                ->each(function (Requirement $requirement) use ($items): void {
+                    $items->push($this->queueItem(
+                        'requirement',
+                        $requirement->id,
+                        $requirement->title,
+                        $requirement->projects->first()?->name,
+                        $requirement->expected_completion_date?->toDateString(),
+                        $this->riskRank((int) $requirement->priority),
+                        "/requirements/{$requirement->id}",
+                        '待验收',
+                    ));
+                });
+        }
 
         if (in_array($role, ['super_admin', 'it_pm', 'requester'], true)) {
             (clone $pendingReviews)
@@ -260,7 +321,7 @@ class DashboardController extends Controller
                 ->orderBy('expected_completion_date')
                 ->limit(self::QUEUE_LIMIT)
                 ->get()
-                ->each(function (Requirement $requirement) use ($items, $visibleProjectIds): void {
+                ->each(function (Requirement $requirement) use ($items, $visibleProjectIds, $role): void {
                     $project = $requirement->projects->first(
                         static fn (Project $project): bool => in_array(
                             (int) $project->id,
@@ -276,6 +337,7 @@ class DashboardController extends Controller
                         $requirement->expected_completion_date?->toDateString(),
                         $this->riskRank((int) $requirement->priority),
                         "/requirements/{$requirement->id}",
+                        $role === 'requester' ? '待重新提交' : '待审核',
                     ));
                 });
         }
@@ -287,6 +349,7 @@ class DashboardController extends Controller
                 ->limit(self::QUEUE_LIMIT)
                 ->get()
                 ->each(function (Task $task) use ($items): void {
+                    $overdue = $task->due_date !== null && $task->due_date->isPast();
                     $items->push($this->queueItem(
                         'task',
                         $task->id,
@@ -294,7 +357,8 @@ class DashboardController extends Controller
                         $task->project?->name,
                         $task->due_date?->toDateString(),
                         $this->riskRank((int) $task->priority),
-                        '/tasks',
+                        "/tasks/{$task->id}",
+                        $overdue ? '已逾期' : '临期',
                     ));
                 });
         }
@@ -312,7 +376,8 @@ class DashboardController extends Controller
                     $defect->project?->name,
                     null,
                     $this->riskRank((int) $defect->severity),
-                    '/defects',
+                    "/defects/{$defect->id}",
+                    DefectStatus::tryFrom((int) $defect->status)?->label() ?? '待处理',
                 ));
             });
 
@@ -356,12 +421,14 @@ class DashboardController extends Controller
                 $rank = min($rank, 2);
             }
 
+            $overdue = false;
             if (
                 $version->status->value <= ProjectVersionStatus::READY_TO_RELEASE->value
                 && $version->planned_release_date !== null
                 && $version->planned_release_date->lte(today()->addDays(self::DUE_WINDOW_DAYS))
             ) {
-                $dateRank = $version->planned_release_date->lt(today())
+                $overdue = $version->planned_release_date->lt(today());
+                $dateRank = $overdue
                     ? 1
                     : ($version->planned_release_date->lte(today()->addDays(3)) ? 2 : 3);
                 $rank = min($rank, $dateRank);
@@ -370,6 +437,13 @@ class DashboardController extends Controller
             if ($rank === PHP_INT_MAX) {
                 continue;
             }
+
+            $reason = match (true) {
+                $isBlocked => '门禁阻断',
+                $version->releaseSnapshot?->is_override === true => '强制发布',
+                $overdue => '已逾期',
+                default => '临近发布',
+            };
 
             $items->push($this->queueItem(
                 'project_version',
@@ -380,6 +454,7 @@ class DashboardController extends Controller
                     ?? $version->released_at?->toISOString(),
                 $rank,
                 "/projects/{$version->project_id}/versions",
+                $reason,
             ));
         }
 
@@ -447,6 +522,7 @@ class DashboardController extends Controller
         ?string $dueAt,
         int $rank,
         string $targetUrl,
+        ?string $reason = null,
     ): array {
         return [
             'type' => $type,
@@ -460,6 +536,7 @@ class DashboardController extends Controller
                 3 => 'medium',
                 default => 'low',
             },
+            'reason' => $reason,
             'target_url' => $targetUrl,
             '_risk_rank' => $rank,
             '_due_sort' => $dueAt ?? '9999-12-31T23:59:59Z',

@@ -40,6 +40,14 @@ class RequirementPolicy
 
     public function update(User $user, Requirement $requirement): bool
     {
+        // 终态冻结（R6）：已上线/已验收的需求不可编辑，改动走变更流程（重新提交新需求）
+        if (in_array($requirement->status, [
+            RequirementStatus::DEPLOYED->value,
+            RequirementStatus::ACCEPTED->value,
+        ], true)) {
+            return false;
+        }
+
         if ($requirement->isRejectedForResubmission()
             && $requirement->submitter_id !== $user->id) {
             return false;

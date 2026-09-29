@@ -101,6 +101,12 @@ final class RequirementController extends Controller
                 ->whereNull('project_version_id'));
         }
 
+        // 待我验收：存在已上线（DEPLOYED）待验收的项目交付
+        if ($request->boolean('pending_acceptance')) {
+            $query->whereHas('projects', fn (Builder $delivery): Builder => $delivery
+                ->where('requirement_project.delivery_status', \App\Enums\ProjectDeliveryStatus::DEPLOYED->value));
+        }
+
         if ($request->has('keyword')) {
             $query->where('title', 'like', '%'.$request->input('keyword').'%');
         }

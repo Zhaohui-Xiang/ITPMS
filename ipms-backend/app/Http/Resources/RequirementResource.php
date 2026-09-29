@@ -3,6 +3,7 @@
 namespace App\Http\Resources;
 
 use App\Enums\Priority;
+use App\Enums\RequirementType;
 use App\Enums\ProjectDeliveryStatus;
 use App\Enums\RequirementStatus;
 use App\Models\RequirementProject;
@@ -15,6 +16,7 @@ final class RequirementResource extends JsonResource
     public function toArray(Request $request): array
     {
         $status = RequirementStatus::tryFrom((int) $this->status);
+        $type = RequirementType::tryFrom((int) $this->requirement_type);
         $priority = Priority::tryFrom((int) $this->priority);
         $attachments = $this->relationLoaded('attachments')
             ? $this->attachments
@@ -28,6 +30,7 @@ final class RequirementResource extends JsonResource
             'priority_code' => $priority?->name,
             'priority_label' => $priority?->label(),
             'requirement_type' => $this->requirement_type,
+            'requirement_type_label' => $type?->label(),
             'status' => (int) $this->status,
             'status_code' => $status?->name,
             'status_label' => $status?->label(),
