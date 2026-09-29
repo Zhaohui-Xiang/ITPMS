@@ -224,7 +224,10 @@ class UserController extends Controller
             return response()->json(['code' => 422, 'message' => '不能禁用自己的账号'], 422);
         }
 
-        $user->update(['is_disabled' => true]);
+        // 最后超管保护（v1.8 §2.10）：advisory 锁事务内重算，归零即拒绝
+        app(\App\Services\Permissions\SuperAdminGuard::class)->protect($user, '禁用', function () use ($user) {
+            $user->update(['is_disabled' => true]);
+        });
 
         // 操作日志
         AuditLogger::log($currentUser->id, [

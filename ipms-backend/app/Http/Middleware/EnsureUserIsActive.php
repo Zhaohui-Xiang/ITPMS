@@ -9,7 +9,8 @@ use Illuminate\Support\Facades\Auth;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * 请求级账号禁用校验：禁用用户的既有会话立即失效。
+ * 请求级账号状态校验（v1.8 §2.10）：禁用/停用用户的既有会话立即失效。
+ * 降权/禁用/停用撤销既有会话，重启用不恢复。
  * 必须挂在 auth 之后使用。
  */
 final class EnsureUserIsActive
@@ -18,7 +19,12 @@ final class EnsureUserIsActive
     {
         $user = $request->user();
 
-        if ($user !== null && $user->is_disabled) {
+        if ($user !== null && ($user->is_disabled || ! $user->is_active)) {
+            $errorCode = $user->is_disabled ? 'ACCOUNT_DISABLED' : 'ACCOUNT_INACTIVE';
+            $message = $user->is_disabled
+                ? '账号已被禁用，请联系管理员。'
+                : '账号未激活，请联系管理员。';
+
             Auth::guard('web')->logout();
             Auth::guard('sanctum')->forgetUser();
 
@@ -27,11 +33,7 @@ final class EnsureUserIsActive
                 $request->session()->regenerateToken();
             }
 
-            return ApiResponse::error(
-                'ACCOUNT_DISABLED',
-                '账号已被禁用，请联系管理员。',
-                403,
-            );
+            return ApiResponse::error($errorCode, $message, 403);
         }
 
         return $next($request);

@@ -84,6 +84,21 @@ final class DisabledUserSessionTest extends TestCase
             ->assertJsonPath('data.user.id', $user->id);
     }
 
+    public function test_inactive_users_existing_session_is_rejected(): void
+    {
+        $user = User::factory()->create(['password' => 'Secret123']);
+
+        $this->postJson('/api/login', ['username' => $user->username, 'password' => 'Secret123'])
+            ->assertOk();
+
+        $user->forceFill(['is_active' => false])->save();
+        Auth::forgetGuards();
+
+        $this->getJson('/api/user')
+            ->assertForbidden()
+            ->assertJsonPath('error_code', 'ACCOUNT_INACTIVE');
+    }
+
     public function test_disabled_user_still_cannot_log_in(): void
     {
         $user = User::factory()->create([
