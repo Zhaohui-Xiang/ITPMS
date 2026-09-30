@@ -241,7 +241,7 @@ async function searchList(page, placeholder, keyword) {
       await chooseOption(page, dialog, '关联项目', DEMO_PROJECT_NAME);
       await screenshot(page, 'b1-requirement-form');
       const created = await uiWrite(page, 'POST', '/api/requirements',
-        () => dialog.getByRole('button', { name: '保存', exact: true }).click());
+        () => dialog.getByRole('button', { name: '提交审核', exact: true }).click());
       artifacts.requirementId = created.id;
       await dialog.waitFor({ state: 'hidden' });
       const persisted = await apiGet(page, `/api/requirements/${created.id}`);
