@@ -87,7 +87,7 @@ onMounted(loadSummary)
     <header class="page-heading">
       <div>
         <h1>工作台</h1>
-        <p>当前职责范围内的待办与发布风险</p>
+        <p>{{ summary.show_release_risks === false ? '当前职责范围内的待办事项' : '当前职责范围内的待办与发布风险' }}</p>
       </div>
       <el-tag
         data-testid="dashboard-role"
