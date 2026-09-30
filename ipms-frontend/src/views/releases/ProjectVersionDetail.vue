@@ -440,7 +440,7 @@ onMounted(loadWorkspace)
                   {{ version.planned_start_date || '-' }}
                 </el-descriptions-item>
                 <el-descriptions-item label="实际发布时间">
-                  {{ version.released_at || '-' }}
+                  {{ version.released_at ? version.released_at.slice(0, 16).replace('T', ' ') : '-' }}
                 </el-descriptions-item>
                 <el-descriptions-item label="范围统计">
                   {{ currentCounts.requirements ?? 0 }} 需求 /

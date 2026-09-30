@@ -121,7 +121,7 @@ onMounted(fetchTree)
   <div class="page-container organization-page">
     <header><h1>组织架构</h1><div class="toolbar">
       <el-select v-model="orgType" :disabled="busy" @change="selected = null; fetchTree()"><el-option v-for="type in types" :key="type.value" :label="type.label" :value="type.value" /></el-select>
-      <el-button :icon="Refresh" aria-label="刷新组织" @click="fetchTree" />
+      <el-tooltip content="刷新组织"><el-button :icon="Refresh" aria-label="刷新组织" @click="fetchTree" /></el-tooltip>
       <el-button :icon="Plus" type="primary" @click="openNode()">新建组织</el-button>
     </div></header>
     <AsyncState :loading="loading" :error="error" :empty="!tree.length" empty-title="暂无组织" @retry="fetchTree">
@@ -130,14 +130,14 @@ onMounted(fetchTree)
         <section v-if="selected">
           <header><div><h2>{{ selected.name }}</h2><p>{{ selected.description }}</p></div>
             <div class="toolbar">
-              <el-button :icon="Plus" aria-label="新建子组织" @click="openNode(false, selected)" />
-              <el-button :icon="Edit" aria-label="编辑组织" @click="openNode(true)" />
-              <el-button :icon="Delete" type="danger" plain aria-label="删除组织" @click="removeNode" />
+              <el-tooltip content="新建子组织"><el-button :icon="Plus" aria-label="新建子组织" @click="openNode(false, selected)" /></el-tooltip>
+              <el-tooltip content="编辑组织"><el-button :icon="Edit" aria-label="编辑组织" @click="openNode(true)" /></el-tooltip>
+              <el-tooltip content="删除组织"><el-button :icon="Delete" type="danger" plain aria-label="删除组织" @click="removeNode" /></el-tooltip>
             </div>
           </header>
           <div class="members-heading"><h3>成员（{{ members.length }}）</h3><el-button :icon="User" :disabled="busy" @click="openMembers">添加成员</el-button></div>
           <div class="table-scroll"><table><thead><tr><th>姓名</th><th>账号</th><th>组织角色</th><th>操作</th></tr></thead>
-            <tbody><tr v-for="member in members" :key="member.id"><td>{{ member.display_name }}</td><td>{{ member.username }}</td><td>{{ member.pivot?.role_in_org || '-' }}</td><td><el-button text :icon="Delete" aria-label="移除成员" :disabled="busy" @click="removeMember(member)" /></td></tr></tbody></table>
+            <tbody><tr v-for="member in members" :key="member.id"><td>{{ member.display_name }}</td><td>{{ member.username }}</td><td>{{ member.pivot?.role_in_org || '-' }}</td><td><el-tooltip content="移除成员"><el-button text :icon="Delete" aria-label="移除成员" :disabled="busy" @click="removeMember(member)" /></el-tooltip></td></tr></tbody></table>
           </div>
           <el-empty v-if="!members.length" description="暂无成员" />
         </section>

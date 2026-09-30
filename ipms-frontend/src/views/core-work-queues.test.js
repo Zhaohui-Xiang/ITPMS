@@ -355,6 +355,32 @@ describe('core work queues', () => {
     expect(wrapper.get('[data-testid="pending-confirm-63"]').text()).toContain('待甲方确认')
   })
 
+  it('highlights overdue and due-soon task deadlines and supports due-date sort', async () => {
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+    const soon = new Date(Date.now() + 86400000).toISOString().slice(0, 10)
+    const later = new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10)
+    mocks.listTasks.mockResolvedValue(page([
+      { ...task([]), id: 71, due_date: yesterday },
+      { ...task([]), id: 72, due_date: soon },
+      { ...task([]), id: 73, due_date: later },
+    ]))
+
+    const wrapper = mountView(TaskList)
+    await flushPromises()
+
+    const dates = wrapper.findAll('.due-date')
+    expect(dates[0].classes()).toContain('due-overdue')
+    expect(dates[1].classes()).toContain('due-soon')
+    expect(dates[2].classes()).not.toContain('due-soon')
+
+    const sortSelect = wrapper.findAllComponents({ name: 'ElSelect' })
+      .find((select) => select.attributes('data-testid') === 'task-sort')
+    await sortSelect.vm.$emit('update:modelValue', 'due_date_desc')
+    await sortSelect.vm.$emit('change')
+    await flushPromises()
+    expect(mocks.listTasks).toHaveBeenLastCalledWith(expect.objectContaining({ sort: 'due_date_desc' }))
+  })
+
   it('verifies and reopens defects through named confirmation flows then reloads', async () => {
     mocks.listDefects.mockResolvedValue(page([
       defect(61, '权限校验失败', ['verify']),

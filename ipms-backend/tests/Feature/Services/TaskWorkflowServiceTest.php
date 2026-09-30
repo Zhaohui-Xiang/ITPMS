@@ -57,7 +57,6 @@ class TaskWorkflowServiceTest extends TestCase
     public static function allowedTransitionProvider(): iterable
     {
         yield 'todo to in progress' => [TaskStatus::TODO, TaskStatus::IN_PROGRESS];
-        yield 'todo to suspended' => [TaskStatus::TODO, TaskStatus::SUSPENDED];
         yield 'in progress to completed' => [TaskStatus::IN_PROGRESS, TaskStatus::COMPLETED];
         yield 'in progress to suspended' => [TaskStatus::IN_PROGRESS, TaskStatus::SUSPENDED];
         yield 'suspended to todo' => [TaskStatus::SUSPENDED, TaskStatus::TODO];
@@ -94,7 +93,7 @@ class TaskWorkflowServiceTest extends TestCase
     public static function invalidTransitionProvider(): iterable
     {
         $allowed = [
-            TaskStatus::TODO->value => [TaskStatus::IN_PROGRESS, TaskStatus::SUSPENDED],
+            TaskStatus::TODO->value => [TaskStatus::IN_PROGRESS],
             TaskStatus::IN_PROGRESS->value => [TaskStatus::COMPLETED, TaskStatus::SUSPENDED],
             TaskStatus::SUSPENDED->value => [TaskStatus::TODO, TaskStatus::IN_PROGRESS],
             TaskStatus::COMPLETED->value => [],

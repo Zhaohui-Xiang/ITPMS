@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { CircleCheck, CircleClose, Link as LinkIcon, Right } from '@element-plus/icons-vue'
+import { GATE_LABELS } from './gateMeta'
 
 const props = defineProps({
   result: {
@@ -23,33 +24,33 @@ const emit = defineEmits(['resolve'])
 // records=记录型（列出具体记录并可跳转详情），link=仅提供列表入口
 const CHECK_META = {
   version_metadata: {
-    label: '版本负责人与计划发布日期已设置',
+    label: GATE_LABELS.version_metadata,
     kind: 'version-field',
     resolveLabel: '前往补充',
   },
   release_notes_present: {
-    label: '发布说明已填写',
+    label: GATE_LABELS.release_notes_present,
     kind: 'version-field',
     field: 'release_notes',
     resolveLabel: '前往填写发布说明',
   },
   non_empty_scope: {
-    label: '版本范围非空',
+    label: GATE_LABELS.non_empty_scope,
     kind: 'link',
     target: '/requirements',
   },
   reviewed_assigned_scope: {
-    label: '范围内需求已审核且有执行负责人',
+    label: GATE_LABELS.reviewed_assigned_scope,
     kind: 'link',
     target: '/requirements',
   },
   project_delivery: {
-    label: '项目交付进度达到目标阶段',
+    label: GATE_LABELS.project_delivery,
     kind: 'link',
     target: '/requirements',
   },
   tasks_completed: {
-    label: '范围任务全部完成',
+    label: GATE_LABELS.tasks_completed,
     kind: 'records',
     field: 'incomplete_task_ids',
     path: '/tasks/',
@@ -57,7 +58,7 @@ const CHECK_META = {
     listTarget: '/tasks',
   },
   severe_defects_closed: {
-    label: '严重缺陷全部关闭',
+    label: GATE_LABELS.severe_defects_closed,
     kind: 'records',
     field: 'open_defect_ids',
     path: '/defects/',
@@ -65,7 +66,7 @@ const CHECK_META = {
     listTarget: '/defects',
   },
   acceptance_complete: {
-    label: '范围内需求全部验收完成',
+    label: GATE_LABELS.acceptance_complete,
     kind: 'link',
     target: '/requirements',
   },

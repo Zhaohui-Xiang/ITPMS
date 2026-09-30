@@ -115,13 +115,14 @@ class CoreAllowedActionsTest extends TestCase
     public function test_task_actions_are_role_state_and_assignee_scoped(): void
     {
         $fixture = $this->fixture();
+        // T4：待开始任务操作集收敛为 开始/认领/分配/编辑，不再可挂起
         $expected = [
-            'it_pm' => ['edit', 'assign', 'transition', 'hold'],
+            'it_pm' => ['edit', 'assign', 'transition'],
             'it_member' => ['edit'],
-            'supplier_pm' => ['edit', 'assign', 'transition', 'hold'],
+            'supplier_pm' => ['edit', 'assign', 'transition'],
             'supplier_dev' => ['claim'],
             'supplier_tester' => [],
-            'superadmin' => ['edit', 'assign', 'claim', 'transition', 'hold'],
+            'superadmin' => ['edit', 'assign', 'claim', 'transition'],
         ];
 
         foreach ($expected as $actor => $actions) {
@@ -764,6 +765,53 @@ class CoreAllowedActionsTest extends TestCase
     /**
      * @return array<string, mixed>
      */
+    public function test_completed_tasks_are_view_only(): void
+    {
+        $fixture = $this->fixture();
+        $fixture['task']->update(['status' => \App\Enums\TaskStatus::COMPLETED->value]);
+
+        foreach (['it_pm', 'supplier_pm', 'superadmin'] as $actor) {
+            $response = $this->actingAs($fixture[$actor])
+                ->getJson("/api/tasks/{$fixture['task']->id}")
+                ->assertOk();
+            $this->assertSame([], $response->json('data.allowed_actions'), "{$actor} 对已完成任务不应有任何操作");
+        }
+
+        $this->actingAs($fixture['it_pm'])
+            ->putJson("/api/tasks/{$fixture['task']->id}", ['title' => '试图修改已完成任务'])
+            ->assertForbidden()
+            ->assertJsonPath('error_code', 'FORBIDDEN');
+    }
+
+    public function test_task_list_supports_due_date_descending_sort(): void
+    {
+        $fixture = $this->fixture();
+        $early = \App\Models\Task::factory()->create([
+            'requirement_id' => $fixture['requirement']->id,
+            'project_id' => $fixture['project']->id,
+            'title' => 'Early task',
+            'due_date' => today()->addDays(1),
+            'status' => \App\Enums\TaskStatus::TODO->value,
+            'created_by_id' => $fixture['it_pm']->id,
+        ]);
+        $late = \App\Models\Task::factory()->create([
+            'requirement_id' => $fixture['requirement']->id,
+            'project_id' => $fixture['project']->id,
+            'title' => 'Late task',
+            'due_date' => today()->addDays(30),
+            'status' => \App\Enums\TaskStatus::TODO->value,
+            'created_by_id' => $fixture['it_pm']->id,
+        ]);
+
+        $asc = $this->actingAs($fixture['it_pm'])->getJson('/api/tasks?page_size=50')->assertOk();
+        $ids = collect($asc->json('data.items'))->pluck('id');
+        $this->assertLessThan($ids->search($late->id), $ids->search($early->id), '默认截止最近优先');
+
+        $desc = $this->actingAs($fixture['it_pm'])->getJson('/api/tasks?sort=due_date_desc&page_size=50')->assertOk();
+        $idsDesc = collect($desc->json('data.items'))->pluck('id');
+        $this->assertLessThan($idsDesc->search($early->id), $idsDesc->search($late->id), '倒序应截止最远优先');
+    }
+
     private function fixture(): array
     {
         $requester = User::factory()->withRole('requester')->create();

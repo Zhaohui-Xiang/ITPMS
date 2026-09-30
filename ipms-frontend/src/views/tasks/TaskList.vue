@@ -55,6 +55,7 @@ const {
 const tasks = ref([])
 const requirementOptions = ref([])
 const keyword = ref(String(route.query.keyword ?? ''))
+const sort = ref(route.query.sort === 'due_date_desc' ? 'due_date_desc' : '')
 const status = ref(route.query.status ? Number(route.query.status) : '')
 const priority = ref(route.query.priority ? Number(route.query.priority) : '')
 const projectId = ref(route.query.project_id ? Number(route.query.project_id) : '')
@@ -76,6 +77,15 @@ const visibleProjects = computed(() => {
   return [...byId.values()]
 })
 
+function dueDateClass(task) {
+  if (!task.due_date || task.status_code === 'COMPLETED') return ''
+  const today = new Date().toISOString().slice(0, 10)
+  if (task.due_date < today) return 'due-overdue'
+  const soon = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10)
+  if (task.due_date <= soon) return 'due-soon'
+  return ''
+}
+
 function buildParams() {
   const params = { ...requestParams.value }
   if (keyword.value.trim()) params.keyword = keyword.value.trim()
@@ -83,6 +93,7 @@ function buildParams() {
   if (priority.value !== '') params.priority = Number(priority.value)
   if (projectId.value !== '') params.project_id = Number(projectId.value)
   if (assigneeId.value !== '') params.assignee_id = Number(assigneeId.value)
+  if (sort.value !== '') params.sort = sort.value
   return params
 }
 
@@ -95,6 +106,7 @@ function queryState() {
   if (priority.value !== '') query.priority = String(priority.value)
   if (projectId.value !== '') query.project_id = String(projectId.value)
   if (assigneeId.value !== '') query.assignee_id = String(assigneeId.value)
+  if (sort.value !== '') query.sort = sort.value
   return query
 }
 
@@ -146,6 +158,7 @@ async function resetFilters() {
   priority.value = ''
   projectId.value = ''
   assigneeId.value = ''
+  sort.value = ''
   setPageSize(20)
   await router.replace({ query: {} })
   await fetchTasks()
@@ -293,6 +306,10 @@ onMounted(() => {
       <el-select v-model="projectId" class="filter-control" clearable filterable placeholder="全部项目">
         <el-option v-for="project in visibleProjects" :key="project.id" :label="project.name" :value="project.id" />
       </el-select>
+      <el-select v-model="sort" class="filter-control" data-testid="task-sort" placeholder="排序：截止最近" @change="applyFilters">
+        <el-option label="排序：截止最近" value="" />
+        <el-option label="排序：截止最远" value="due_date_desc" />
+      </el-select>
       <el-select v-model="assigneeId" class="filter-control" clearable placeholder="全部负责人">
         <el-option v-for="user in [...new Map(tasks.filter(item => item.assignee).map(item => [item.assignee.id, item.assignee])).values()]" :key="user.id" :label="user.display_name" :value="user.id" />
       </el-select>
@@ -337,7 +354,10 @@ onMounted(() => {
                 <span class="record-meta">{{ task.requirement?.title || '-' }}</span>
               </td>
               <td>{{ task.assignee?.display_name || '未分配' }}</td>
-              <td>{{ task.due_date || '-' }}</td>
+              <td>
+                <span v-if="task.due_date" class="due-date" :class="dueDateClass(task)">{{ task.due_date }}</span>
+                <span v-else>-</span>
+              </td>
               <td>{{ task.priority_label || '-' }}</td>
               <td>
                 <StatusTag :status-code="task.status_code" :status-label="task.status_label" />
@@ -554,5 +574,15 @@ onMounted(() => {
   .form-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.due-date.due-overdue {
+  color: $color-danger;
+  font-weight: 600;
+}
+
+.due-date.due-soon {
+  color: $color-warning;
+  font-weight: 600;
 }
 </style>

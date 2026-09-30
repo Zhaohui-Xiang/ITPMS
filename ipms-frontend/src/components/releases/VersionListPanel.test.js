@@ -50,11 +50,31 @@ describe('VersionListPanel', () => {
     expect(wrapper.text()).toContain('周项目经理')
     expect(wrapper.text()).toContain('2026-09-30')
     expect(wrapper.text()).toContain('4')
-    expect(wrapper.text()).toContain('1 项阻断')
+    expect(wrapper.text()).toContain('阻断：范围任务全部完成')
     expect(wrapper.findAll('button')).toHaveLength(1)
 
     await wrapper.get('[data-testid="open-version-31"]').trigger('click')
     expect(wrapper.emitted('open')).toEqual([[versions[0]]])
+  })
+
+  it('summarizes gate conclusions in the list', () => {
+    const wrapper = mount(VersionListPanel, {
+      props: {
+        versions: [
+          { ...versions[0], id: 41, gate_result: { passed: true, checks: [{ code: 'a' }, { code: 'b' }], blocking: [] } },
+          { ...versions[0], id: 42, gate_result: { passed: false, blocking: [{ code: 'release_notes_present' }, { code: 'tasks_completed' }] } },
+        ],
+      },
+      global: {
+        stubs: {
+          ElButton,
+          VersionStatusTag: { props: ['statusCode', 'statusLabel'], template: '<span>{{ statusLabel }}</span>' },
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('门禁通过（2/2）')
+    expect(wrapper.text()).toContain('阻断：发布说明已填写 等 2 项')
   })
 
   it('renders a stable empty state without mock releases', () => {

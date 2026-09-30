@@ -1,6 +1,7 @@
 <script setup>
 import { View } from '@element-plus/icons-vue'
 import VersionStatusTag from './VersionStatusTag.vue'
+import { gateLabel } from './gateMeta'
 
 defineProps({
   versions: {
@@ -16,9 +17,17 @@ defineProps({
 defineEmits(['open'])
 
 function gateSummary(version) {
-  if (version.gate_result?.passed === true) return '门禁通过'
-  if (version.gate_result?.passed === false) {
-    return `${version.gate_result.blocking?.length ?? 0} 项阻断`
+  const gate = version.gate_result
+  if (gate?.passed === true) {
+    const total = gate.checks?.length ?? 0
+    return total > 0 ? `门禁通过（${total}/${total}）` : '门禁通过'
+  }
+  if (gate?.passed === false) {
+    const blockers = gate.blocking ?? []
+    const first = blockers[0]
+    if (!first) return '存在阻断项'
+    const label = gateLabel(first.code, first.label)
+    return blockers.length > 1 ? `阻断：${label} 等 ${blockers.length} 项` : `阻断：${label}`
   }
   if (['RELEASED', 'ARCHIVED'].includes(version.status_code)) return '已完成'
   return '进入详情检查'

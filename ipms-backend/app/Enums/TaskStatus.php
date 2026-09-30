@@ -15,7 +15,7 @@ enum TaskStatus: int
     public function allowedTransitions(): array
     {
         return match ($this) {
-            self::TODO => [self::IN_PROGRESS, self::SUSPENDED],
+            self::TODO => [self::IN_PROGRESS],
             self::IN_PROGRESS => [self::COMPLETED, self::SUSPENDED],
             self::SUSPENDED => [self::TODO, self::IN_PROGRESS],
             self::COMPLETED => [],

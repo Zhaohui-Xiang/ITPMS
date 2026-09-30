@@ -4,6 +4,7 @@ namespace App\Policies;
 
 use App\Enums\UserType;
 use App\Models\Project;
+use App\Enums\TaskStatus;
 use App\Models\Task;
 use App\Models\User;
 
@@ -42,6 +43,11 @@ class TaskPolicy
 
     public function update(User $user, Task $task): bool
     {
+        // T4：已完成任务仅可查看
+        if ((int) $task->status === TaskStatus::COMPLETED->value) {
+            return false;
+        }
+
         if ($user->isSuperAdmin()) {
             return true;
         }
@@ -57,6 +63,11 @@ class TaskPolicy
 
     public function assign(User $user, Task $task): bool
     {
+        // T4：已完成任务仅可查看
+        if ((int) $task->status === TaskStatus::COMPLETED->value) {
+            return false;
+        }
+
         if ($user->isSuperAdmin()) {
             return true;
         }

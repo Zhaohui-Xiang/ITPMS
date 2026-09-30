@@ -49,9 +49,10 @@ final class TaskController extends Controller
         }
 
         $pageSize = min(max($request->integer('page_size', 20), 1), 100);
+        $sort = $request->input('sort');
         $paginator = $query
-            ->orderBy('due_date')
-            ->orderBy('priority')
+            ->when($sort === 'due_date_desc', fn ($q) => $q->orderByDesc('due_date')->orderBy('priority'))
+            ->when($sort !== 'due_date_desc', fn ($q) => $q->orderBy('due_date')->orderBy('priority'))
             ->paginate($pageSize);
 
         return ApiResponse::paginated(
