@@ -156,4 +156,61 @@ class User extends Authenticatable
             );
         });
     }
+
+    /**
+     * 软删除对齐原硬删除的 FK 语义：SET NULL 字段置空、CASCADE 关系表清除。
+     * RESTRICT 引用（需求提交人、项目负责人、审计日志等）保持可追溯。
+     */
+    protected static function booted(): void
+    {
+        static::deleting(function (User $user): void {
+            if ($user->isForceDeleting()) {
+                return;
+            }
+            $id = $user->id;
+            // SET NULL 语义
+            DB::table('tasks')->where('assignee_id', $id)->update(['assignee_id' => null]);
+            DB::table('defects')->where('assignee_id', $id)->update(['assignee_id' => null]);
+            DB::table('requirements')->where('reviewer_id', $id)->update(['reviewer_id' => null]);
+            DB::table('requirements')->where('dev_lead_id', $id)->update(['dev_lead_id' => null]);
+            DB::table('requirements')->where('updated_by_id', $id)->update(['updated_by_id' => null]);
+            // requirement_project 受版本门禁写保护：在授权写上下文中置空
+            DB::transaction(function () use ($id): void {
+                $linkIds = DB::table('requirement_project')
+                    ->where('version_assigned_by_id', $id)
+                    ->pluck('id')
+                    ->map(fn ($linkId) => (int) $linkId)
+                    ->sort()->values()->all();
+                if ($linkIds === []) {
+                    return;
+                }
+                DB::select(
+                    "SELECT set_config('itpms.requirement_project_write_ids', ?, true)",
+                    [json_encode($linkIds, JSON_THROW_ON_ERROR)],
+                );
+                DB::table('requirement_project')
+                    ->where('version_assigned_by_id', $id)
+                    ->update(['version_assigned_by_id' => null]);
+            });
+            DB::table('project_versions')->where('released_by_id', $id)->update(['released_by_id' => null]);
+            DB::table('api_documents')->where('updated_by_id', $id)->update(['updated_by_id' => null]);
+            DB::table('documents')->where('deleted_by_id', $id)->update(['deleted_by_id' => null]);
+            DB::table('users')->where('created_by_id', $id)->update(['created_by_id' => null]);
+            DB::table('role_user')->where('assigned_by_id', $id)->update(['assigned_by_id' => null]);
+            DB::table('project_members')->where('assigned_by_id', $id)->update(['assigned_by_id' => null]);
+            DB::table('permission_rules')->where('granted_by_id', $id)->update(['granted_by_id' => null]);
+            DB::table('field_permissions')->where('granted_by_id', $id)->update(['granted_by_id' => null]);
+            DB::table('resource_auth_builds')->where('activated_by', $id)->update(['activated_by' => null]);
+            // CASCADE 语义
+            DB::table('role_user')->where('user_id', $id)->delete();
+            DB::table('organization_user')->where('user_id', $id)->delete();
+            DB::table('project_members')->where('user_id', $id)->delete();
+            DB::table('in_app_notifications')->where('user_id', $id)->delete();
+            DB::table('notification_configs')->where('user_id', $id)->delete();
+            DB::table('permission_rules')->where('user_id', $id)->delete();
+            DB::table('data_scopes')->where('user_id', $id)->delete();
+            DB::table('field_permissions')->where('user_id', $id)->delete();
+            DB::table('superadmin_recovery_credentials')->where('target_user_id', $id)->delete();
+        });
+    }
 }

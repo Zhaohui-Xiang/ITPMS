@@ -123,6 +123,17 @@ describe('frontend API contracts', () => {
     expect(request.put).toHaveBeenCalledWith('/settings/password', password)
   })
 
+  it('maps inbox notification methods to the live backend routes', async () => {
+    await notificationApi.getUnreadCount()
+    expect(request.get).toHaveBeenCalledWith('/notifications/unread-count')
+    await notificationApi.listInbox({ page: 1, page_size: 10 })
+    expect(request.get).toHaveBeenCalledWith('/notifications', { params: { page: 1, page_size: 10 } })
+    await notificationApi.markNotificationRead(7)
+    expect(request.post).toHaveBeenCalledWith('/notifications/7/read')
+    await notificationApi.markAllNotificationsRead()
+    expect(request.post).toHaveBeenCalledWith('/notifications/read-all')
+  })
+
   it('does not expose methods without backend routes', () => {
     expect(projectApi).not.toHaveProperty('checkProjectDeletable')
     expect(requirementApi).not.toHaveProperty('getRequirementTasks')
@@ -134,10 +145,7 @@ describe('frontend API contracts', () => {
     expect(documentApi).not.toHaveProperty('forceDeleteDocument')
     expect(userApi).not.toHaveProperty('enableUser')
     expect(userApi).not.toHaveProperty('getUserProfile')
-    expect(notificationApi).not.toHaveProperty('getUnreadCount')
     expect(notificationApi).not.toHaveProperty('listMyNotifications')
-    expect(notificationApi).not.toHaveProperty('markNotificationRead')
-    expect(notificationApi).not.toHaveProperty('markAllNotificationsRead')
     expect(notificationApi).not.toHaveProperty('sendTestEmail')
     expect(dashboardApi).not.toHaveProperty('getRecentActivities')
     expect(dashboardApi).not.toHaveProperty('getProjectOverview')

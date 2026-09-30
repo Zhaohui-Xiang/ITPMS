@@ -37,6 +37,7 @@ vi.mock('@/api/requirement', () => ({
   reviewRequirement,
 }))
 vi.mock('@/api/task', () => ({ listTasks }))
+vi.mock('@/api/auditLog', () => ({ listAuditLogs: vi.fn().mockResolvedValue({ data: { data: { items: [] } } }) }))
 vi.mock('@/api/defect', () => ({ listDefects }))
 vi.mock('element-plus', () => ({
   ElMessage: {
